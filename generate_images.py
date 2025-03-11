@@ -82,7 +82,6 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
                 {
                     phase_name: [
                         wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
-                        # wandb.Image(image, caption=f"{i}: {args.validation_prompt}") for i, image in enumerate(images)
                     ]
                 }
             )
