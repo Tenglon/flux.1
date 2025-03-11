@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import os
 import random
 import shutil
@@ -5,8 +6,68 @@ from diffusers.utils import is_xformers_available
 import numpy as np
 from packaging import version
 from accelerate.logging import get_logger
+import torch
+import wandb
 
 logger = get_logger(__name__, log_level="INFO")
+
+
+
+def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False, class_embeddings=None, class_set=None):
+    logger.info(
+        f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
+        f" {args.validation_prompt}."
+    )
+    pipeline = pipeline.to(accelerator.device)
+    pipeline.set_progress_bar_config(disable=False)
+    generator = torch.Generator(device=accelerator.device)
+    if args.seed is not None:
+        generator = generator.manual_seed(args.seed)
+    images = []
+    if torch.backends.mps.is_available():
+        autocast_ctx = nullcontext()
+    else:
+        autocast_ctx = torch.autocast(accelerator.device.type)
+
+    prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
+
+    # START: add class embeddings
+    prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
+    class_labels = torch.tensor(prompt_idxs).to(accelerator.device)
+    
+    cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
+    prompt_embeds = cond_embeddings[:, None, :] # [batch_size, 1, 768], where 1 is the sequence length
+    negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+    classidx2name = {i: name for i, name in enumerate(class_set)}
+    prompt_labels = [classidx2name[i] for i in prompt_idxs]
+    prompt_labels = [args.validation_prompt.format(prompt_label) for prompt_label in prompt_labels]
+
+    with autocast_ctx:
+        generated = pipeline(prompt = None, 
+                             guidance_scale=args.guidance_scale, 
+                             num_inference_steps=300, 
+                             generator=generator, 
+                             prompt_embeds=prompt_embeds, 
+                             negative_prompt_embeds=negative_prompt_embeds)
+        generated_images = generated.images
+        images = generated_images
+    # END: add class embeddings
+
+    for tracker in accelerator.trackers:
+        phase_name = "test" if is_final_validation else "validation"
+        if tracker.name == "tensorboard":
+            np_images = np.stack([np.asarray(img) for img in images])
+            tracker.writer.add_images(phase_name, np_images, epoch, dataformats="NHWC")
+        if tracker.name == "wandb":
+            tracker.log(
+                {
+                    phase_name: [
+                        wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
+                    ]
+                }
+            )
+    return images
+
 
 def ckpt_limit(args):
     checkpoints = os.listdir(args.output_dir)

@@ -109,25 +109,20 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
 
     prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
 
+    # START: add class embeddings
+    prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
+    class_labels = torch.tensor(prompt_idxs).to(accelerator.device)
+    
+    cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
+    classidx2name = {i: name for i, name in enumerate(class_set)}
+    prompt_labels = [classidx2name[i] for i in prompt_idxs]
+    prompt_labels = [PROMPT_TEMPLATE.format(prompt_label) for prompt_label in prompt_labels]
+
     with autocast_ctx:
-        for i in range(args.num_validation_images):
-            # START: add class embeddings
-            prompt_labelidx = prompt_idxs[i]
-            cond_embeddings = class_embeddings[prompt_labelidx]
-            cond_embeddings = cond_embeddings.to(accelerator.device)
-            classidx2name = {i: name for i, name in enumerate(class_set)}
-            prompt_label = classidx2name[prompt_labelidx]
-            prompt_label = PROMPT_TEMPLATE.format(prompt_label)
-
-            ### START:DDIM Scheduler
-            pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config, rescale_betas_zero_snr=True)
-            ### END: DDIM Scheduler
-
-            generated_images = pipeline("", guidance_scale=args.guidance_scale, num_inference_steps=250, generator=generator, class_labels=cond_embeddings).images
-            images.append(generated_images[0])
-            # images.append(pipeline(args.validation_prompt, num_inference_steps=30, generator=generator).images[0])
-
-            # END: add class embeddings
+        generated = pipeline(prompt_labels, guidance_scale=args.guidance_scale, num_inference_steps=30, generator=generator, class_labels=class_labels)
+        generated_images = generated.images
+        images = generated_images
+    # END: add class embeddings
 
     for tracker in accelerator.trackers:
         phase_name = "test" if is_final_validation else "validation"
@@ -139,7 +134,6 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
                 {
                     phase_name: [
                         wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
-                        # wandb.Image(image, caption=f"{i}: {args.validation_prompt}") for i, image in enumerate(images)
                     ]
                 }
             )
@@ -159,7 +153,7 @@ def parse_args():
     parser.add_argument("--image_column", type=str, default="image", help="The column of the dataset containing an image.")
     parser.add_argument("--caption_column", type=str, default="text", help="The column of the dataset containing a caption or a list of captions.")
     parser.add_argument("--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference.")
-    parser.add_argument("--num_validation_images", type=int, default=8, help="Number of images that should be generated during validation with `validation_prompt`.")
+    parser.add_argument("--num_validation_images", type=int, default=4, help="Number of images that should be generated during validation with `validation_prompt`.")
     parser.add_argument("--validation_epochs", type=int, default=2, help="Run fine-tuning validation every X epochs. The validation process consists of running the prompt `args.validation_prompt` multiple times: `args.num_validation_images`.")
 
     parser.add_argument("--max_train_samples", type=int, default=None, help="For debugging purposes or quicker training, truncate the number of training examples to this value if set.")
@@ -216,6 +210,7 @@ def parse_args():
     return args
 
 
+args = parse_args()
 
 DATASET_NAME_MAPPING = {
     "lambdalabs/naruto-blip-captions": ("image", "text"),
@@ -223,10 +218,14 @@ DATASET_NAME_MAPPING = {
     "Donghyun99/Stanford-Cars": ("image", "label"),
 }
 
-PROMPT_TEMPLATE = 'A photo of a {}'
+PROMPT_MAPPING = {
+    "keremberke/pokemon-classification": "A photo of a pokemon.",
+    "Donghyun99/CUB-200-2011": "A photo of a bird.",
+    "Donghyun99/Stanford-Cars": "A photo of a car.",
+}
+PROMPT_TEMPLATE = PROMPT_MAPPING[args.dataset_name]
 
 def main():
-    args = parse_args()
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -293,14 +292,14 @@ def main():
 
     ##### Start Inject class embeddings #####
 
-    unet._set_class_embedding(
-        class_embed_type="simple_projection",
-        act_fn=None, # Not important for identity embedding
-        num_class_embeds=None, # Not important for identity embedding
-        projection_class_embeddings_input_dim=768, # Not important for identity embedding
-        time_embed_dim=unet.time_embedding.linear_1.out_features,
-        timestep_input_dim=None, # Not important for identity embedding
-    )
+    # unet._set_class_embedding(
+    #     class_embed_type="simple_projection",
+    #     act_fn=None, # Not important for identity embedding
+    #     num_class_embeds=None, # Not important for identity embedding
+    #     projection_class_embeddings_input_dim=768, # Not important for identity embedding
+    #     time_embed_dim=unet.time_embedding.linear_1.out_features,
+    #     timestep_input_dim=None, # Not important for identity embedding
+    # )
     # print(unet.time_embedding.linear_1.weight.shape)
 
     # unet.class_embedding.weight = torch.nn.Parameter(torch.eye(unet.time_embedding.linear_1.out_features))
@@ -371,7 +370,7 @@ def main():
     else:
         optimizer_cls = torch.optim.AdamW
 
-    if args.use_lora:
+    if not args.use_lora:
         optimizer = optimizer_cls(
             lora_layers,
             lr=args.learning_rate,
@@ -414,7 +413,8 @@ def main():
     # class_embeddings = torch.randn(len(class_set), 1280) # here 1280 is the dimension of the time embedding, which = unet.time_embedding.linear_1.out_features
     class_embeddings = torch.zeros(len(class_set), 768)
     for i, name in enumerate(class_set):
-        class_embeddings[i] = text_encoder(tokenizer(PROMPT_TEMPLATE.format(name), padding=True, return_tensors="pt").input_ids.to(accelerator.device))[1]
+        PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
+        class_embeddings[i] = text_encoder(tokenizer(PROMPT_TEMPLATE_EMBEDDING.format(name), padding=True, return_tensors="pt").input_ids.to(accelerator.device))[1]
 
     # Preprocessing the datasets.
     train_transforms = transforms.Compose(
@@ -596,6 +596,9 @@ def main():
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
 
+                    import pdb
+                    pdb.set_trace()
+
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
@@ -672,14 +675,23 @@ def main():
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         unet = unet.to(torch.float32)
-
         unwrapped_unet = unwrap_model(unet)
-        unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unwrapped_unet))
-        StableDiffusionPipeline.save_lora_weights(
-            save_directory=args.output_dir,
-            unet_lora_layers=unet_lora_state_dict,
-            safe_serialization=True,
-        )
+        
+        if args.use_lora:
+            unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unwrapped_unet))
+            StableDiffusionPipeline.save_lora_weights(
+                save_directory=args.output_dir,
+                unet_lora_layers=unet_lora_state_dict,
+                safe_serialization=True,
+            )
+        else:
+            # Save full model weights
+            unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
+            StableDiffusionPipeline.save_pretrained(
+                save_directory=args.output_dir,
+                unet=unwrapped_unet,
+                safe_serialization=True,
+            )
 
         # Final inference
         # Load previous pipeline
@@ -692,8 +704,12 @@ def main():
                 safety_checker=None
             )
 
-            # load attention processors
-            pipeline.load_lora_weights(args.output_dir)
+            if args.use_lora:
+                # load attention processors for LoRA
+                pipeline.load_lora_weights(args.output_dir)
+            else:
+                # Load the trained unet
+                pipeline.unet = unwrapped_unet
 
             # run inference
             images = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set, is_final_validation=True)

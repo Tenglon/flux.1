@@ -65,11 +65,10 @@ export LAUNCHER2="accelerate launch \
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
-# export DATASET_NAME="lambdalabs/pokemon-blip-captions"
 # export DATASET_NAME="wanghaofan/pokemon-wiki-captions"
-# export DATASET_NAME="keremberke/pokemon-classification"
+export DATASET_NAME="keremberke/pokemon-classification"
 # export DATASET_NAME="Donghyun99/CUB-200-2011"
-export DATASET_NAME="Donghyun99/Stanford-Cars"
+# export DATASET_NAME="Donghyun99/Stanford-Cars"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
@@ -86,12 +85,13 @@ then
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
     --resolution=512 --center_crop --random_flip \
-    --train_batch_size=32 \
+    --train_batch_size=16 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="fp16" \
     --use_lora \
     --max_train_steps=15000 \
     --learning_rate=1e-4 \
+    --snr_gamma=5.0 \
     --max_grad_norm=1 \
     --lr_scheduler="cosine" --lr_warmup_steps=0 \
     --output_dir=${OUTPUT_DIR} \
@@ -113,12 +113,13 @@ else
     --use_lora \
     --max_train_steps=15000 \
     --learning_rate=1e-4 \
+    --snr_gamma=5.0 \
     --max_grad_norm=1 \
     --lr_scheduler="cosine" --lr_warmup_steps=0 \
     --output_dir=${OUTPUT_DIR} \
     --report_to=wandb \
     --checkpointing_steps=500 \
-    --validation_prompt="" \
+    --validation_prompt="a photo of a" \
     --guidance_scale=7.5 \
     --seed=42
 fi
