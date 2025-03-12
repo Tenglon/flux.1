@@ -1,0 +1,6 @@
+/output/
+/wandb/
+/mnist
+gitee_ai_test.py
+*.pyc
+/train_logs/
