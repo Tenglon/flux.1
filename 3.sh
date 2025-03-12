@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=160GB
-#SBATCH --time=48:00:00  # Adjust time limit as needed
+#SBATCH --time=24:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
 # module purge
@@ -46,7 +46,7 @@ MACHINE_RANK=${SLURM_NODEID:-0}
 
 export LAUNCHER="accelerate launch \
     --num_processes $((SLURM_NNODES * GPUS_PER_NODE)) \
-    --num_machines $SLURM_NNODES \  
+    --num_machines $SLURM_NNODES \
     --machine_rank $MACHINE_RANK \
     --rdzv_backend c10d \
     --main_process_ip $head_node_ip \
@@ -66,8 +66,8 @@ export LAUNCHER2="accelerate launch \
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
 # export DATASET_NAME="wanghaofan/pokemon-wiki-captions"
-export DATASET_NAME="keremberke/pokemon-classification"
-# export DATASET_NAME="Donghyun99/CUB-200-2011"
+# export DATASET_NAME="keremberke/pokemon-classification"
+export DATASET_NAME="Donghyun99/CUB-200-2011"
 # export DATASET_NAME="Donghyun99/Stanford-Cars"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
@@ -75,7 +75,7 @@ export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 # export HF_ENDPOINT=https://hf-api.gitee.com
 # export HF_HOME=~/.cache/gitee-ai
 
-export USE_SBATCH=0
+export USE_SBATCH=1
 
 if [ $USE_SBATCH -eq 1 ]
 then
@@ -89,13 +89,13 @@ then
     --train_batch_size=32 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="bf16" \
-    --max_train_steps=15000 \
+    --max_train_steps=400000 \
     --learning_rate=1e-4 \
     --snr_gamma=5.0 \
     --max_grad_norm=1 \
     --lr_scheduler="cosine" --lr_warmup_steps=0 \
     --output_dir=${OUTPUT_DIR} \
-    --checkpointing_steps=500 \
+    --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
     --guidance_scale=7.5 \
@@ -108,16 +108,16 @@ else
     --dataloader_num_workers=8 \
     --resolution=512 --center_crop --random_flip \
     --resolution_latent=64 \
-    --train_batch_size=32 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="bf16" \
-    --max_train_steps=15000 \
+    --max_train_steps=400000 \
     --learning_rate=1e-4 \
     --snr_gamma=5.0 \
     --max_grad_norm=1 \
     --lr_scheduler="cosine" --lr_warmup_steps=0 \
     --output_dir=${OUTPUT_DIR} \
-    --checkpointing_steps=500 \
+    --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
     --guidance_scale=7.5 \
