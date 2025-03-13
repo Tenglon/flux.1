@@ -365,7 +365,7 @@ def main():
         # Set the training transforms
         train_dataset = full_dataset.with_transform(preprocess_train)  
 
-    logger.info(f"Dataset size: {len(dataset)}")
+    logger.info(f"Dataset size: {full_dataset.num_rows}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -410,7 +410,7 @@ def main():
     max_train_steps = args.num_epochs * num_update_steps_per_epoch
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(dataset)}")
+    logger.info(f"  Num examples = {full_dataset.num_rows}")
     logger.info(f"  Num Epochs = {args.num_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -427,7 +427,7 @@ def main():
         unet.train()
         train_loss = 0.0
 
-        progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
+        progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process, mininterval=1)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -549,7 +549,7 @@ def main():
         unwrapped_unet = unwrap_model(unet)
         
         # Save full model weights
-        unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
+        # unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
         StableDiffusionPipeline.save_pretrained(
             save_directory=args.output_dir,
             unet=unwrapped_unet,

@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=train_pokemon_lora
-#SBATCH --output=train_logs/output_pokemon_lora_%j.log
-#SBATCH --error=train_logs/error_pokemon_lora_%j.log
-#SBATCH --partition=gpu_h100
+#SBATCH --output=train_logs/output_tiny%j.log
+#SBATCH --error=train_logs/error_tiny%j.log
+#SBATCH --partition=performance
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=160GB
-#SBATCH --time=24:00:00  # Adjust time limit as needed
+#SBATCH --gpus-per-node=4
+#SBATCH --cpus-per-task=128
+#SBATCH --mem=320GB
+#SBATCH --time=168:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
 # module purge
@@ -66,8 +66,8 @@ export LAUNCHER2="accelerate launch \
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
 # export DATASET_NAME="wanghaofan/pokemon-wiki-captions"
-# export DATASET_NAME="keremberke/pokemon-classification"
-export DATASET_NAME="Donghyun99/CUB-200-2011"
+export DATASET_NAME="keremberke/pokemon-classification"
+# export DATASET_NAME="Donghyun99/CUB-200-2011"
 # export DATASET_NAME="Donghyun99/Stanford-Cars"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
@@ -79,7 +79,7 @@ export USE_SBATCH=1
 
 if [ $USE_SBATCH -eq 1 ]
 then
-    srun $LAUNCHER2 \
+    srun $LAUNCHER \
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
@@ -101,14 +101,14 @@ then
     --guidance_scale=7.5 \
     --seed=42
 else
-    $LAUNCHER2 \
+    $LAUNCHER \
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
     --resolution=512 --center_crop --random_flip \
     --resolution_latent=64 \
-    --train_batch_size=64 \
+    --train_batch_size=32 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \

@@ -19,7 +19,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
         f" {args.validation_prompt}."
     )
     pipeline = pipeline.to(accelerator.device)
-    pipeline.set_progress_bar_config(disable=False)
+    pipeline.set_progress_bar_config(disable=True)
     generator = torch.Generator(device=accelerator.device)
     if args.seed is not None:
         generator = generator.manual_seed(args.seed)
@@ -45,7 +45,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     with autocast_ctx:
         generated = pipeline(prompt = None, 
                              guidance_scale=args.guidance_scale, 
-                             num_inference_steps=300, 
+                             num_inference_steps=999, 
                              generator=generator, 
                              prompt_embeds=prompt_embeds, 
                              negative_prompt_embeds=negative_prompt_embeds)
