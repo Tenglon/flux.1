@@ -14,7 +14,7 @@
 # module purge
 # module load cuda
 # module load anaconda  # or whatever environment management you use
-ml NCCL/2.18.3-GCCcore-12.3.0-CUDA-12.1.1
+# ml NCCL/2.18.3-GCCcore-12.3.0-CUDA-12.1.1
 
 # Activate your conda environment if needed
 # source activate your_env_name
@@ -22,7 +22,7 @@ ml NCCL/2.18.3-GCCcore-12.3.0-CUDA-12.1.1
 ######################
 ### Set enviroment ###
 ######################
-source activate flux
+conda activate flux
 export GPUS_PER_NODE=4
 ######################
 
