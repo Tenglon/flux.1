@@ -8,6 +8,7 @@ import torch
 from torchvision import transforms
 from utils import tokenize_captions, tokenize_captions2
 from transformers import CLIPTokenizer
+from diffusers import AutoencoderKL
 # os.environ["HF_ENDPOINT"] = "https://hf-api.gitee.com"
 # os.environ["HF_HOME"] = "~/.cache/gitee-ai"
 
@@ -59,6 +60,9 @@ train_transforms = transforms.Compose(
 
 tokenizer = CLIPTokenizer.from_pretrained(
     args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
+)
+vae = AutoencoderKL.from_pretrained(
+    args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
 )
 
 
