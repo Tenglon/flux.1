@@ -86,7 +86,6 @@ def collate_fn(examples):
 
 if __name__ == "__main__":
 
-
     dataset = load_from_disk(args.dataset_name)
     image_column = 'image'
     class_column = 'labels'
