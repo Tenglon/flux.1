@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets, load_from_disk
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from torchvision import transforms
@@ -25,7 +25,6 @@ import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel, compute_snr, cast_training_params, convert_state_dict_to_diffusers
-from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available, convert_state_dict_to_diffusers
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 
@@ -112,7 +111,6 @@ def parse_args():
     parser.add_argument("--eval_batch_size", type=int, default=16, help="The number of images to generate for evaluation.")
 
     parser.add_argument("--dataloader_num_workers", type=int, default=0, help="The number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process.")
-    parser.add_argument("--num_epochs", type=int, default=100)
     parser.add_argument("--max_train_steps", type=int, default=None, required=True, help="Total number of training steps to perform.  If provided, overrides num_train_epochs.")
 
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of updates steps to accumulate before performing a backward/update pass.")
@@ -150,7 +148,7 @@ def parse_args():
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="The scale of the guidance.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
 
-    parser.add_argument("--validation_epochs", type=int, default=2, help="The number of epochs to validate the model.")
+    parser.add_argument("--validation_epochs", type=int, default=20, help="The number of epochs to validate the model.")
     parser.add_argument("--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference.")
     parser.add_argument("--num_validation_images", type=int, default=8, help="The number of images to validate the model.")
 
@@ -167,16 +165,12 @@ def parse_args():
     return args
 
 args = parse_args()
-DATASET_NAME_MAPPING = {
-    "lambdalabs/naruto-blip-captions": ("image", "text"),
-    "wanghaofan/pokemon-wiki-captions": ("image", "text_en", "name_en"),
-    "Donghyun99/Stanford-Cars": ("image", "label"),
-}
+
 
 PROMPT_MAPPING = {
-    "keremberke/pokemon-classification": "A photo of a pokemon.",
-    "Donghyun99/CUB-200-2011": "A photo of a bird.",
-    "Donghyun99/Stanford-Cars": "A photo of a car.",
+    "./keremberke/pokemon-classification_latents.hf": "A photo of a pokemon.",
+    "./Donghyun99/CUB-200-2011_latents.hf": "A photo of a bird.",
+    "./Donghyun99/Stanford-Cars_latents.hf": "A photo of a car.",
 }
 PROMPT_TEMPLATE = PROMPT_MAPPING[args.dataset_name]
 
@@ -300,28 +294,14 @@ def main():
         eps=args.adam_epsilon,
     )
 
-    # Get the datasets: you can either provide your own training and evaluation files (see below)
-    # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    if args.dataset_name == "keremberke/pokemon-classification":
-        dataset = load_dataset(args.dataset_name, 'full', cache_dir=args.cache_dir, data_dir=args.train_data_dir)
-        image_column = 'image'
-        class_column = 'labels'
-    else:
-        dataset = load_dataset(args.dataset_name, args.dataset_config_name, cache_dir=args.cache_dir, data_dir=args.train_data_dir)
-        # Preprocessing the datasets.
-        # We need to tokenize inputs and targets.
-        column_names = dataset["train"].column_names
-
-        # 6. Get the column names for input/target.
-        dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
-
-        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-        class_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-
-    class_set = dataset['train'].features[class_column].names
+    dataset = load_from_disk(args.dataset_name)
+    image_column = 'image'
+    class_column = 'labels'
+    latents_column = 'latents'
+    
+    class_set = dataset.features[class_column].names
+    print(class_set)
     classidx2name = {i: name for i, name in enumerate(class_set)}
     # class_embeddings = torch.randn(len(class_set), 1280) # here 1280 is the dimension of the time embedding, which = unet.time_embedding.linear_1.out_features
     class_embeddings = torch.zeros(len(class_set), 300)
@@ -350,30 +330,29 @@ def main():
         images = [image.convert("RGB") for image in examples[image_column]]
         examples["pixel_values"] = [train_transforms(image) for image in images]
         # examples["input_ids"] = tokenize_captions(tokenizer, examples, caption_column)
-        examples["input_ids"] = tokenize_captions2(tokenizer, examples, class_column, PROMPT_TEMPLATE)
+        # examples["input_ids"] = tokenize_captions2(tokenizer, examples, class_column, PROMPT_TEMPLATE)
         examples["class_labels"] = examples[class_column]
+        examples["latents"] = examples[latents_column]
         return examples
 
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
-        if args.dataset_name == "keremberke/pokemon-classification":
-            full_dataset = concatenate_datasets([dataset['train'], dataset['validation'], dataset['test']])
-        else:
-            full_dataset = concatenate_datasets([dataset['train'], dataset['test']])
+            dataset = dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = full_dataset.with_transform(preprocess_train)  
+        train_dataset = dataset.with_transform(preprocess_train)  
 
-    logger.info(f"Dataset size: {full_dataset.num_rows}")
+    logger.info(f"Dataset size: {dataset.num_rows}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-        input_ids = torch.stack([example["input_ids"] for example in examples])
+        latents_list = [torch.tensor(example['latents']) for example in examples]   
+        latents = torch.stack(latents_list)
+        # input_ids = torch.stack([example["input_ids"] for example in examples])
         class_labels = torch.tensor([example["class_labels"] for example in examples])
         cond_embeddings = class_embeddings[class_labels]
-        return {"pixel_values": pixel_values, "input_ids": input_ids, "class_labels": class_labels, "cond_embeddings": cond_embeddings}
+        return {"pixel_values": pixel_values, "class_labels": class_labels, "cond_embeddings": cond_embeddings, "latents": latents}
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -388,7 +367,7 @@ def main():
         args.lr_scheduler,
         optimizer=optimizer,
         num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=(len(train_dataloader) * args.num_epochs),
+        num_training_steps=args.max_train_steps,
     )
 
     # Prepare everything with our `accelerator`.
@@ -407,11 +386,13 @@ def main():
 
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-    max_train_steps = args.num_epochs * num_update_steps_per_epoch
+    # max_train_steps = args.num_epochs * num_update_steps_per_epoch
+    max_train_steps = args.max_train_steps
+    num_epochs = math.ceil(max_train_steps / num_update_steps_per_epoch)
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {full_dataset.num_rows}")
-    logger.info(f"  Num Epochs = {args.num_epochs}")
+    logger.info(f"  Num examples = {dataset.num_rows}")
+    logger.info(f"  Num Epochs = {num_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
@@ -423,7 +404,7 @@ def main():
     first_epoch, resume_step = resume_training_if_needed(args, accelerator, num_update_steps_per_epoch)
 
     # Train!
-    for epoch in range(first_epoch, args.num_epochs):
+    for epoch in range(first_epoch, num_epochs):
         unet.train()
         train_loss = 0.0
 
@@ -437,10 +418,7 @@ def main():
                         progress_bar.update(1)
                     continue
 
-                clean_images = batch["pixel_values"].to(weight_dtype)
-                # encode images into latent space
-                latents = vae.encode(clean_images).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                latents = batch["latents"].to(weight_dtype)
 
                 # Sample noise that we'll add to the images
                 noise = torch.randn(latents.shape, dtype=weight_dtype, device=latents.device)

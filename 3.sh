@@ -65,10 +65,9 @@ export LAUNCHER2="accelerate launch \
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
-# export DATASET_NAME="wanghaofan/pokemon-wiki-captions"
-export DATASET_NAME="keremberke/pokemon-classification"
-# export DATASET_NAME="Donghyun99/CUB-200-2011"
-# export DATASET_NAME="Donghyun99/Stanford-Cars"
+# export DATASET_NAME="./keremberke/pokemon-classification_latents.hf"
+export DATASET_NAME="./Donghyun99/CUB-200-2011_latents.hf"
+# export DATASET_NAME="./Donghyun99/Stanford-Cars_latents.hf"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
@@ -86,7 +85,7 @@ then
     --dataloader_num_workers=8 \
     --resolution=512 --center_crop --random_flip \
     --resolution_latent=64 \
-    --train_batch_size=32 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -101,14 +100,14 @@ then
     --guidance_scale=7.5 \
     --seed=42
 else
-    $LAUNCHER \
+    $LAUNCHER2 \
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
     --resolution=512 --center_crop --random_flip \
     --resolution_latent=64 \
-    --train_batch_size=32 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
