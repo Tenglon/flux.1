@@ -37,7 +37,7 @@ class args:
 DATASET_NAME_MAPPING = {
     # "lambdalabs/naruto-blip-captions": ("image", "text"),
     # "wanghaofan/pokemon-wiki-captions": ("image", "text_en", "name_en", "text_zh", "name_zh"),
-    "keremberke/pokemon-classification": ("image", "labels"),
+    "keremberke/pokemon-classification": ("image", "label"),
     "Donghyun99/CUB-200-2011": ("image", "label"),
     "Donghyun99/Stanford-Cars": ("image", "label"),
 }
