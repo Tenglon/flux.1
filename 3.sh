@@ -2,12 +2,12 @@
 #SBATCH --job-name=train_pokemon_lora
 #SBATCH --output=train_logs/output_tiny%j.log
 #SBATCH --error=train_logs/error_tiny%j.log
-#SBATCH --partition=performance
-#SBATCH --nodes=1
+#SBATCH --partition=capacity
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=128
-#SBATCH --mem=320GB
+#SBATCH --gpus-per-node=8
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=160GB
 #SBATCH --time=168:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
@@ -22,8 +22,8 @@
 ######################
 ### Set enviroment ###
 ######################
-conda activate flux
-export GPUS_PER_NODE=4
+source activate flux
+export GPUS_PER_NODE=8
 ######################
 
 ######################
@@ -65,9 +65,9 @@ export LAUNCHER2="accelerate launch \
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
-# export DATASET_NAME="./keremberke/pokemon-classification_latents.hf"
-export DATASET_NAME="./Donghyun99/CUB-200-2011_latents.hf"
-# export DATASET_NAME="./Donghyun99/Stanford-Cars_latents.hf"
+export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
+# export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
+# export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
@@ -83,10 +83,10 @@ then
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
-    --resolution=512 --center_crop --random_flip \
-    --resolution_latent=64 \
-    --train_batch_size=64 \
-    --gradient_accumulation_steps=4 \
+    --resolution=256 --center_crop --random_flip \
+    --resolution_latent=32 \
+    --train_batch_size=16 \
+    --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
     --learning_rate=1e-4 \
@@ -98,6 +98,7 @@ then
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
     --guidance_scale=7.5 \
+    --emb_type="oh" \
     --seed=42
 else
     $LAUNCHER2 \
@@ -105,10 +106,10 @@ else
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
-    --resolution=512 --center_crop --random_flip \
-    --resolution_latent=64 \
-    --train_batch_size=64 \
-    --gradient_accumulation_steps=4 \
+    --resolution=256 --center_crop --random_flip \
+    --resolution_latent=32 \
+    --train_batch_size=16 \
+    --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
     --learning_rate=1e-4 \
@@ -120,5 +121,6 @@ else
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
     --guidance_scale=7.5 \
+    --emb_type="oh" \
     --seed=42
 fi

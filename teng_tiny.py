@@ -148,6 +148,8 @@ def parse_args():
     parser.add_argument("--guidance_scale", type=float, default=7.5, help="The scale of the guidance.")
     parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
 
+    parser.add_argument("--emb_type", type=str, default="oh", help="The type of the embedding.")
+
     parser.add_argument("--validation_epochs", type=int, default=20, help="The number of epochs to validate the model.")
     parser.add_argument("--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference.")
     parser.add_argument("--num_validation_images", type=int, default=8, help="The number of images to validate the model.")
@@ -168,9 +170,9 @@ args = parse_args()
 
 
 PROMPT_MAPPING = {
-    "./keremberke/pokemon-classification_latents.hf": "A photo of a pokemon.",
-    "./Donghyun99/CUB-200-2011_latents.hf": "A photo of a bird.",
-    "./Donghyun99/Stanford-Cars_latents.hf": "A photo of a car.",
+    "./local_datasets/keremberke/pokemon-classification_latents": "A photo of a pokemon.",
+    "./local_datasets/Donghyun99/CUB-200-2011_latents": "A photo of a bird.",
+    "./local_datasets/Donghyun99/Stanford-Cars_latents": "A photo of a car.",
 }
 PROMPT_TEMPLATE = PROMPT_MAPPING[args.dataset_name]
 
@@ -204,6 +206,26 @@ def main():
     # Handle the repository creation, create output_dir and push to hub
     create_repository(args, accelerator)
 
+    dataset = load_from_disk(args.dataset_name)
+    image_column = 'image'
+    class_column = 'label'
+    latents_column = 'latents'
+    
+    class_set = dataset['class_level_hyp']['objects']
+    print(class_set)
+    # class_embeddings = torch.randn(len(class_set), 300)
+    # for i, name in enumerate(class_set):
+        # PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
+        # class_embeddings[i] = text_encoder(tokenizer(PROMPT_TEMPLATE_EMBEDDING.format(name), padding=True, return_tensors="pt").input_ids.to(accelerator.device))[1]
+    if args.emb_type == "oh":
+        class_embeddings = torch.tensor(dataset['class_level_oh']['embeddings'])
+    elif args.emb_type == "hyp":
+        class_embeddings = torch.tensor(dataset['class_level_hyp']['embeddings'])
+    elif args.emb_type == "sph":
+        class_embeddings = torch.tensor(dataset['class_level_sph']['embeddings'])
+    else:
+        raise ValueError(f"Unknown embedding type: {args.emb_type}")
+
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
     )
@@ -236,8 +258,8 @@ def main():
             "CrossAttnUpBlock2D",
         ),
         only_cross_attention=False, # 是否只使用交叉注意力, 而不使用自注意力
-        cross_attention_dim=300, # 交叉注意力维度, 此处设置为条件向量的维度
-        projection_class_embeddings_input_dim=300, # 条件向量维度
+        cross_attention_dim=class_embeddings.shape[1], # 交叉注意力维度, 此处设置为条件向量的维度
+        projection_class_embeddings_input_dim=None, # 条件向量维度
         # class_embed_type="simple_projection", # 条件向量类型, 可选值为"simple"或"projection"
     )
 
@@ -295,21 +317,6 @@ def main():
     )
 
 
-    dataset = load_from_disk(args.dataset_name)
-    image_column = 'image'
-    class_column = 'labels'
-    latents_column = 'latents'
-    
-    class_set = dataset.features[class_column].names
-    print(class_set)
-    classidx2name = {i: name for i, name in enumerate(class_set)}
-    # class_embeddings = torch.randn(len(class_set), 1280) # here 1280 is the dimension of the time embedding, which = unet.time_embedding.linear_1.out_features
-    class_embeddings = torch.zeros(len(class_set), 300)
-    class_embeddings = torch.randn(len(class_set), 300)
-    # for i, name in enumerate(class_set):
-        # PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
-        # class_embeddings[i] = text_encoder(tokenizer(PROMPT_TEMPLATE_EMBEDDING.format(name), padding=True, return_tensors="pt").input_ids.to(accelerator.device))[1]
-
     def unwrap_model(model):
         model = accelerator.unwrap_model(model)
         model = model._orig_mod if is_compiled_module(model) else model
@@ -338,11 +345,11 @@ def main():
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset = dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
+            dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = dataset.with_transform(preprocess_train)  
+        train_dataset = dataset['sample_level'].with_transform(preprocess_train)  
 
-    logger.info(f"Dataset size: {dataset.num_rows}")
+    logger.info(f"Dataset size: {train_dataset.num_rows}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])

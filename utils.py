@@ -33,14 +33,13 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
 
     # START: add class embeddings
     prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
-    class_labels = torch.tensor(prompt_idxs).to(accelerator.device)
     
     cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
     prompt_embeds = cond_embeddings[:, None, :] # [batch_size, 1, 768], where 1 is the sequence length
     negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-    classidx2name = {i: name for i, name in enumerate(class_set)}
-    prompt_labels = [classidx2name[i] for i in prompt_idxs]
-    prompt_labels = [args.validation_prompt.format(prompt_label) for prompt_label in prompt_labels]
+    # classidx2name = {i: name for i, name in enumerate(class_set)}
+    # prompt_labels = [classidx2name[i] for i in prompt_idxs]
+    # prompt_labels = [args.validation_prompt.format(prompt_label) for prompt_label in prompt_labels]
 
     with autocast_ctx:
         generated = pipeline(prompt = None, 
