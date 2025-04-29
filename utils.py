@@ -13,7 +13,7 @@ logger = get_logger(__name__, log_level="INFO")
 
 
 
-def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False, class_embeddings=None, class_set=None):
+def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False, class_embeddings=None, class_set=None, latents=None):
     logger.info(
         f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
         f" {args.validation_prompt}."
@@ -47,7 +47,8 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
                              num_inference_steps=999, 
                              generator=generator, 
                              prompt_embeds=prompt_embeds, 
-                             negative_prompt_embeds=negative_prompt_embeds)
+                             negative_prompt_embeds=negative_prompt_embeds,
+                             latents=latents)
         generated_images = generated.images
         images = generated_images
     # END: add class embeddings
