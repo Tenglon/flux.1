@@ -2,19 +2,19 @@
 #SBATCH --job-name=train_pokemon_lora
 #SBATCH --output=train_logs/output_tiny%j.log
 #SBATCH --error=train_logs/error_tiny%j.log
-#SBATCH --partition=capacity
+#SBATCH --partition=gpu_a100
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=8
+#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=64
-#SBATCH --mem=160GB
-#SBATCH --time=168:00:00  # Adjust time limit as needed
+#SBATCH --mem=320GB
+#SBATCH --time=120:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
 # module purge
 # module load cuda
 # module load anaconda  # or whatever environment management you use
-# ml NCCL/2.18.3-GCCcore-12.3.0-CUDA-12.1.1
+ml NCCL/2.18.3-GCCcore-12.3.0-CUDA-12.1.1
 
 # Activate your conda environment if needed
 # source activate your_env_name
@@ -23,7 +23,7 @@
 ### Set enviroment ###
 ######################
 source activate flux
-export GPUS_PER_NODE=8
+export GPUS_PER_NODE=4
 ######################
 
 ######################
@@ -43,6 +43,8 @@ export HYDRA_FULL_ERROR=1
 export MASTER_NODE=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 
 MACHINE_RANK=${SLURM_NODEID:-0}
+
+echo $SLURM_NNODES, $((SLURM_NNODES * GPUS_PER_NODE)), $MACHINE_RANK
 
 export LAUNCHER="accelerate launch \
     --num_processes $((SLURM_NNODES * GPUS_PER_NODE)) \
@@ -105,10 +107,11 @@ else
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
+    --max_train_samples=64 \
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=16 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \

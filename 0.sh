@@ -21,12 +21,12 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --job-name=preprocess_${job_name}
 #SBATCH --output=logs/${job_name}_%j.log
 #SBATCH --error=logs/${job_name}_%j.log
-#SBATCH --partition=capacity
+#SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=80GB
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=160GB
 #SBATCH --time=24:00:00
 
 source activate flux
