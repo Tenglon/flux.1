@@ -150,7 +150,7 @@ def parse_args():
 
     parser.add_argument("--emb_type", type=str, default="oh", help="The type of the embedding.")
 
-    parser.add_argument("--validation_epochs", type=int, default=20, help="The number of epochs to validate the model.")
+    parser.add_argument("--validation_epochs", type=int, default=10, help="The number of epochs to validate the model.")
     parser.add_argument("--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference.")
     parser.add_argument("--num_validation_images", type=int, default=8, help="The number of images to validate the model.")
 
@@ -212,7 +212,6 @@ def main():
     latents_column = 'latents'
     
     class_set = dataset['class_level_hyp']['objects']
-    print(class_set)
     # class_embeddings = torch.randn(len(class_set), 300)
     # for i, name in enumerate(class_set):
         # PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
@@ -345,11 +344,28 @@ def main():
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed).select(range(args.max_train_samples))
+            dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed)
+            idx = torch.tensor(dataset['sample_level']['label']) == 1
+            idx = torch.where(idx)[0]
+            # Resample idx to match args.max_train_samples size
+            if len(idx) < args.max_train_samples:
+                # Calculate how many times we need to repeat the indices
+                repeat_factor = args.max_train_samples // len(idx) + 1
+                # Repeat the indices and then select the required number
+                idx = idx.repeat(repeat_factor)[:args.max_train_samples]
+            import pdb
+            pdb.set_trace()
+            dataset['sample_level'] = dataset['sample_level'].select(idx)
+            # if args.max_train_samples is not None:
+                # dataset['sample_level'] = dataset['sample_level'].select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = dataset['sample_level'].with_transform(preprocess_train)  
+        train_dataset = dataset['sample_level'].with_transform(preprocess_train)
+        # print the label of the first 10 samples
 
     logger.info(f"Dataset size: {train_dataset.num_rows}")
+    class_set_plain = dataset['sample_level'].features[class_column].names
+    train_labels = [class_set_plain[label] for label in dataset['sample_level']['label']]
+    logger.info(f"Label of the samples: {train_labels}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -514,6 +530,7 @@ def main():
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
                 # create pipeline
+
                 pipeline = DiffusionPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
                     unet=unwrap_model(unet),
@@ -523,6 +540,20 @@ def main():
                     safety_checker=None
                 )
                 images = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set)
+                images_decode = pipeline.vae.decode(latents, return_dict=False, generator=None)[0]
+
+                for tracker in accelerator.trackers:
+                    if tracker.name == "wandb":
+                        tracker.log(
+                            {
+                                'original_image': [
+                                    wandb.Image(image, caption=f"{i}: the original image") for i, image in enumerate(images)
+                                ],
+                                'decoded_image': [
+                                    wandb.Image(image, caption=f"{i}: the decoded image") for i, image in enumerate(images_decode)
+                                ]
+                            }
+                        )
 
                 del pipeline
                 torch.cuda.empty_cache()

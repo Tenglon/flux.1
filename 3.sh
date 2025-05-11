@@ -2,12 +2,12 @@
 #SBATCH --job-name=train_pokemon_lora
 #SBATCH --output=train_logs/output_tiny%j.log
 #SBATCH --error=train_logs/error_tiny%j.log
-#SBATCH --partition=gpu_a100
-#SBATCH --nodes=2
+#SBATCH --partition=performance
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=64
-#SBATCH --mem=320GB
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=60GB
 #SBATCH --time=120:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
@@ -76,7 +76,7 @@ export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 # export HF_ENDPOINT=https://hf-api.gitee.com
 # export HF_HOME=~/.cache/gitee-ai
 
-export USE_SBATCH=1
+export USE_SBATCH=0
 
 if [ $USE_SBATCH -eq 1 ]
 then
@@ -84,6 +84,7 @@ then
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
+    --max_train_samples=1600 \
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
@@ -99,7 +100,8 @@ then
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
-    --guidance_scale=7.5 \
+    --validation_epochs=10 \
+    --guidance_scale=4 \
     --emb_type="oh" \
     --seed=42
 else
@@ -107,11 +109,11 @@ else
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
-    --max_train_samples=64 \
+    --max_train_samples=1600 \
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=64 \
+    --train_batch_size=16 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -123,7 +125,8 @@ else
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
-    --guidance_scale=7.5 \
+    --validation_epochs=10 \
+    --guidance_scale=4 \
     --emb_type="oh" \
     --seed=42
 fi

@@ -287,9 +287,6 @@ def main():
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
     )
 
-    # import pdb
-    # pdb.set_trace()
-
     ##### Start Inject class embeddings #####
 
     # unet._set_class_embedding(
@@ -441,12 +438,13 @@ def main():
         return examples
 
     with accelerator.main_process_first():
-        if args.max_train_samples is not None:
-            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         if args.dataset_name == "keremberke/pokemon-classification":
             full_dataset = concatenate_datasets([dataset['train'], dataset['validation'], dataset['test']])
         else:
             full_dataset = concatenate_datasets([dataset['train'], dataset['test']])
+            
+        if args.max_train_samples is not None:
+            full_dataset = full_dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = full_dataset.with_transform(preprocess_train)       
         # train_dataset = dataset["train"].with_transform(preprocess_train)
@@ -596,9 +594,6 @@ def main():
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
 
-                    import pdb
-                    pdb.set_trace()
-
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
@@ -640,12 +635,16 @@ def main():
                                 safe_serialization=True,
                             )
                         else:
-                            unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
-                            StableDiffusionPipeline.save_weights(
-                                save_directory=save_path,
-                                weights=unet_state_dict,
-                                safe_serialization=True,
+                            # Save full model weights
+                            pipeline = DiffusionPipeline.from_pretrained(
+                                args.pretrained_model_name_or_path,
+                                revision=args.revision,
+                                variant=args.variant,
+                                torch_dtype=torch.float32,
                             )
+                            pipeline.unet = unwrapped_unet
+                            pipeline.save_pretrained(args.output_dir)
+                            logger.info(f"Full model saved to {args.output_dir}")
 
                         logger.info(f"Saved state to {save_path}")
 
@@ -686,12 +685,16 @@ def main():
             )
         else:
             # Save full model weights
-            unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
-            StableDiffusionPipeline.save_pretrained(
-                save_directory=args.output_dir,
-                unet=unwrapped_unet,
-                safe_serialization=True,
+            pipeline = DiffusionPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                revision=args.revision,
+                variant=args.variant,
+                torch_dtype=torch.float32,
             )
+            pipeline.unet = unwrapped_unet
+            pipeline.save_pretrained(args.output_dir)
+            logger.info(f"Full model saved to {args.output_dir}")
+
 
         # Final inference
         # Load previous pipeline

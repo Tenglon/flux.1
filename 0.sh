@@ -21,7 +21,7 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --job-name=preprocess_${job_name}
 #SBATCH --output=logs/${job_name}_%j.log
 #SBATCH --error=logs/${job_name}_%j.log
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=capacity
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1

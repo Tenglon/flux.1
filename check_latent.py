@@ -150,7 +150,8 @@ def main():
                 torch_dtype=vae.dtype,
                 safety_checker=None
             )
-            images_decode = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+            # images_decode = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+            images_decode = pipeline.vae.decode(latents, return_dict=False, generator=None)[0]
 
             for tracker in accelerator.trackers:
 

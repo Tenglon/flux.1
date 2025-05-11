@@ -36,6 +36,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     
     cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
     prompt_embeds = cond_embeddings[:, None, :] # [batch_size, 1, 768], where 1 is the sequence length
+    # prompt_embeds = torch.zeros_like(prompt_embeds)
     negative_prompt_embeds = torch.zeros_like(prompt_embeds)
     # classidx2name = {i: name for i, name in enumerate(class_set)}
     # prompt_labels = [classidx2name[i] for i in prompt_idxs]
@@ -53,19 +54,19 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
         images = generated_images
     # END: add class embeddings
 
-    for tracker in accelerator.trackers:
-        phase_name = "test" if is_final_validation else "validation"
-        if tracker.name == "tensorboard":
-            np_images = np.stack([np.asarray(img) for img in images])
-            tracker.writer.add_images(phase_name, np_images, epoch, dataformats="NHWC")
-        if tracker.name == "wandb":
-            tracker.log(
-                {
-                    phase_name: [
-                        wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
-                    ]
-                }
-            )
+    # for tracker in accelerator.trackers:
+    #     phase_name = "test" if is_final_validation else "validation"
+    #     if tracker.name == "tensorboard":
+    #         np_images = np.stack([np.asarray(img) for img in images])
+    #         tracker.writer.add_images(phase_name, np_images, epoch, dataformats="NHWC")
+    #     if tracker.name == "wandb":
+    #         tracker.log(
+    #             {
+    #                 phase_name: [
+    #                     wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
+    #                 ]
+    #             }
+    #         )
     return images
 
 

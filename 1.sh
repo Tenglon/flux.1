@@ -84,7 +84,7 @@ then
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
     --dataloader_num_workers=8 \
-    --resolution=512 --center_crop --random_flip \
+    --resolution=256 --center_crop --random_flip \
     --train_batch_size=16 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="fp16" \
@@ -105,9 +105,10 @@ else
     train_text_to_image_lora.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
+    --max_train_samples=1 \
     --dataloader_num_workers=8 \
-    --resolution=512 --center_crop --random_flip \
-    --train_batch_size=32 \
+    --resolution=256 --center_crop --random_flip \
+    --train_batch_size=16 \
     --gradient_accumulation_steps=4 \
     --mixed_precision="fp16" \
     --use_lora \
