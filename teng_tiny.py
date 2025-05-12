@@ -345,7 +345,7 @@ def main():
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
             dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed)
-            idx = torch.tensor(dataset['sample_level']['label']) == 1
+            idx = torch.tensor([(label in [1, 2, 3]) for label in dataset['sample_level']['label']])
             idx = torch.where(idx)[0]
             # Resample idx to match args.max_train_samples size
             if len(idx) < args.max_train_samples:
@@ -365,7 +365,7 @@ def main():
     logger.info(f"Dataset size: {train_dataset.num_rows}")
     class_set_plain = dataset['sample_level'].features[class_column].names
     train_labels = [class_set_plain[label] for label in dataset['sample_level']['label']]
-    logger.info(f"Label of the samples: {train_labels}")
+    # logger.info(f"Label of the samples: {train_labels}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -539,7 +539,8 @@ def main():
                     torch_dtype=weight_dtype,
                     safety_checker=None
                 )
-                images = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set)
+                generated_latents = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set)[0]
+                generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
                 images_decode = pipeline.vae.decode(latents, return_dict=False, generator=None)[0]
 
                 for tracker in accelerator.trackers:
@@ -547,11 +548,13 @@ def main():
                         tracker.log(
                             {
                                 'original_image': [
-                                    wandb.Image(image, caption=f"{i}: the original image") for i, image in enumerate(images)
+                                    wandb.Image(image, caption=f"{i}: the original image") for i, image in enumerate(images_decode)
                                 ],
-                                'decoded_image': [
-                                    wandb.Image(image, caption=f"{i}: the decoded image") for i, image in enumerate(images_decode)
-                                ]
+                                'generated_image': [
+                                    wandb.Image(image, caption=f"{i}: the decoded image") for i, image in enumerate(generated_images)
+                                ],
+                                'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
+                                'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
                             }
                         )
 

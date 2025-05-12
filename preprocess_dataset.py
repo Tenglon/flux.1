@@ -66,7 +66,7 @@ def preprocess_train(examples):
     pixel_values = torch.stack(pixel_values)
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float().to(device)
     latents = vae.encode(pixel_values).latent_dist.sample()
-    # latents = latents * vae.config.scaling_factor
+    latents = latents * vae.config.scaling_factor
     examples["latents"] = latents
     return examples
 

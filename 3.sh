@@ -84,7 +84,7 @@ then
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
-    --max_train_samples=1600 \
+    --max_train_samples=16000 \
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
@@ -109,7 +109,7 @@ else
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
-    --max_train_samples=1600 \
+    --max_train_samples=16000 \
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
@@ -125,7 +125,7 @@ else
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
     --num_validation_images=8 \
-    --validation_epochs=10 \
+    --validation_epochs=5 \
     --guidance_scale=4 \
     --emb_type="oh" \
     --seed=42

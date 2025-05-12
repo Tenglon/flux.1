@@ -43,15 +43,16 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     # prompt_labels = [args.validation_prompt.format(prompt_label) for prompt_label in prompt_labels]
 
     with autocast_ctx:
-        generated = pipeline(prompt = None, 
+        generated_latents = pipeline(prompt = None, 
                              guidance_scale=args.guidance_scale, 
                              num_inference_steps=999, 
                              generator=generator, 
                              prompt_embeds=prompt_embeds, 
                              negative_prompt_embeds=negative_prompt_embeds,
-                             latents=latents)
-        generated_images = generated.images
-        images = generated_images
+                             latents=latents,
+                             output_type="latent")
+        # generated_images = pipeline.vae.decode(generated_latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
+        images = generated_latents
     # END: add class embeddings
 
     # for tracker in accelerator.trackers:
