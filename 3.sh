@@ -127,9 +127,9 @@ else
     --output_dir=${OUTPUT_DIR} \
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
-    --num_validation_images=8 \
+    --num_validation_images=32 \
     --validation_epochs=5 \
-    --guidance_scale=4 \
+    --guidance_scale=7.5 \
     --emb_type="hyp" \
     --seed=42
 fi

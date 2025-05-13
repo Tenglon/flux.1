@@ -41,9 +41,9 @@ selected_cars = [
     # "Dodge_Sprinter_Cargo_Van_2009",
     
     # First 3 Minivans
-    "Chevrolet_HHR_SS_2010",
-    "Chrysler_Town_and_Country_Minivan_2012",
-    "Dodge_Caravan_Minivan_1997"
+    # "Chevrolet_HHR_SS_2010",
+    # "Chrysler_Town_and_Country_Minivan_2012",
+    # "Dodge_Caravan_Minivan_1997"
 ]
 
 # First 3 classes for each parent_class with at least 3 children
@@ -132,9 +132,9 @@ selected_birds = [
 # First 3 Pokemon for each type
 selected_pokemon = [
     # First 3 Normal type
-    "Porygon",
-    "Rattata",
-    "Raticate",
+    # "Porygon",
+    # "Rattata",
+    # "Raticate",
     
     # First 3 Water type
     "Goldeen",
@@ -142,24 +142,24 @@ selected_pokemon = [
     "Seaking",
     
     # First 3 Fighting type
-    "Hitmonlee",
-    "Hitmonchan",
-    "Mankey",
+    # "Hitmonlee",
+    # "Hitmonchan",
+    # "Mankey",
     
     # First 3 Grass type
-    "Gloom",
-    "Oddish",
-    "Bellsprout",
+    # "Gloom",
+    # "Oddish",
+    # "Bellsprout",
     
     # First 3 Poison type
-    "Arbok",
-    "Nidorina",
-    "Nidoqueen",
+    # "Arbok",
+    # "Nidorina",
+    # "Nidoqueen",
     
     # First 3 Rock type
-    "Kabuto",
-    "Kabutops",
-    "Geodude",
+    # "Kabuto",
+    # "Kabutops",
+    # "Geodude",
     
     # First 3 Flying type
     "Aerodactyl",
@@ -167,22 +167,22 @@ selected_pokemon = [
     "Fearow",
     
     # First 3 Ghost type
-    "Gastly",
-    "Haunter",
-    "Gengar",
+    # "Gastly",
+    # "Haunter",
+    # "Gengar",
     
     # First 3 Ice type
-    "Alolan Sandslash",
+    # "Alolan Sandslash",
     
     # First 3 Psychic type
-    "Abra",
-    "Kadabra",
-    "Alakazam",
+    # "Abra",
+    # "Kadabra",
+    # "Alakazam",
     
     # First 3 Ground type
-    "Diglett",
-    "Dugtrio",
-    "Cubone",
+    # "Diglett",
+    # "Dugtrio",
+    # "Cubone",
     
     # First 3 Bug type
     "Caterpie",
@@ -200,18 +200,14 @@ selected_pokemon = [
     "Ninetales",
     
     # First 3 Dragon type
-    "Dratini",
-    "Dragonair",
-    "Dragonite",
-    
-    # First 3 Steel type
-    "Magnemite",
-    "Magneton",
+    # "Dratini",
+    # "Dragonair",
+    # "Dragonite",
     
     # First 3 Fairy type
-    "Clefairy",
-    "Clefable",
-    "Jigglypuff"
+    # "Clefairy",
+    # "Clefable",
+    # "Jigglypuff"
 ]
 
 class HierUtil:
