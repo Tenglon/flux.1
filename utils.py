@@ -19,7 +19,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
         f" {args.validation_prompt}."
     )
     pipeline = pipeline.to(accelerator.device)
-    pipeline.set_progress_bar_config(disable=True)
+    pipeline.set_progress_bar_config(disable=False)
     generator = torch.Generator(device=accelerator.device)
     if args.seed is not None:
         generator = generator.manual_seed(args.seed)
@@ -29,11 +29,12 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     else:
         autocast_ctx = torch.autocast(accelerator.device.type)
 
-    prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
+    # Use random.choices instead of random.sample to allow replacement when sample size > population
+    prompt_idxs = random.choices(range(len(class_set)), k=args.num_validation_images)
+    # For the limited range of 3, also use choices to allow replacement
+    # prompt_idxs = random.choices(range(4), k=args.num_validation_images)
 
     # START: add class embeddings
-    prompt_idxs = random.sample(range(len(class_set)), args.num_validation_images)
-    
     cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
     prompt_embeds = cond_embeddings[:, None, :] # [batch_size, 1, 768], where 1 is the sequence length
     # prompt_embeds = torch.zeros_like(prompt_embeds)
@@ -51,24 +52,9 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
                              negative_prompt_embeds=negative_prompt_embeds,
                              latents=latents,
                              output_type="latent")
-        # generated_images = pipeline.vae.decode(generated_latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=generator)[0]
-        images = generated_latents
     # END: add class embeddings
 
-    # for tracker in accelerator.trackers:
-    #     phase_name = "test" if is_final_validation else "validation"
-    #     if tracker.name == "tensorboard":
-    #         np_images = np.stack([np.asarray(img) for img in images])
-    #         tracker.writer.add_images(phase_name, np_images, epoch, dataformats="NHWC")
-    #     if tracker.name == "wandb":
-    #         tracker.log(
-    #             {
-    #                 phase_name: [
-    #                     wandb.Image(image, caption=f"{i}: {class_set[prompt_idxs[i]]}") for i, image in enumerate(images)
-    #                 ]
-    #             }
-    #         )
-    return images
+    return generated_latents, prompt_idxs
 
 
 def ckpt_limit(args):

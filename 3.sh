@@ -2,12 +2,12 @@
 #SBATCH --job-name=train_pokemon_lora
 #SBATCH --output=train_logs/output_tiny%j.log
 #SBATCH --error=train_logs/error_tiny%j.log
-#SBATCH --partition=performance
+#SBATCH --partition=gpu_h100
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
+#SBATCH --gpus-per-node=2
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=60GB
+#SBATCH --mem=320GB
 #SBATCH --time=120:00:00  # Adjust time limit as needed
 
 # Load necessary modules (adjust according to your system)
@@ -58,7 +58,8 @@ export LAUNCHER="accelerate launch \
     "
 
 export LAUNCHER2="accelerate launch \
-    --num_processes 1 \
+    --num_processes 2 \
+    --main_process_port 29501 \
     --num_machines 1 \
     --mixed_precision bf16 \
     --dynamo_backend=no \
@@ -67,14 +68,16 @@ export LAUNCHER2="accelerate launch \
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
-export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
+# export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
 # export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
-# export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
+export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
 # export HF_ENDPOINT=https://hf-api.gitee.com
 # export HF_HOME=~/.cache/gitee-ai
+
+# export CUDA_VISIBLE_DEVICES=0,1
 
 export USE_SBATCH=0
 
@@ -88,7 +91,7 @@ then
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=16 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -102,7 +105,7 @@ then
     --num_validation_images=8 \
     --validation_epochs=10 \
     --guidance_scale=4 \
-    --emb_type="oh" \
+    --emb_type="hyp" \
     --seed=42
 else
     $LAUNCHER2 \
@@ -113,7 +116,7 @@ else
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=16 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -127,6 +130,6 @@ else
     --num_validation_images=8 \
     --validation_epochs=5 \
     --guidance_scale=4 \
-    --emb_type="oh" \
+    --emb_type="hyp" \
     --seed=42
 fi

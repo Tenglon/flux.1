@@ -30,6 +30,7 @@ from diffusers.utils.torch_utils import is_compiled_module
 
 import wandb
 from utils import ckpt_limit, enable_xformers, log_validation, tokenize_captions2
+from hier_util import HierUtil
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -175,6 +176,13 @@ PROMPT_MAPPING = {
     "./local_datasets/Donghyun99/Stanford-Cars_latents": "A photo of a car.",
 }
 PROMPT_TEMPLATE = PROMPT_MAPPING[args.dataset_name]
+
+selected_hier_mapping = {
+    "./local_datasets/keremberke/pokemon-classification_latents": HierUtil.get_selected_pokemon(),
+    "./local_datasets/Donghyun99/CUB-200-2011_latents": HierUtil.get_selected_birds(),
+    "./local_datasets/Donghyun99/Stanford-Cars_latents": HierUtil.get_selected_cars(),
+}
+
 
 
 def main():
@@ -342,10 +350,18 @@ def main():
         return examples
 
 
+    class_set_plain = dataset['sample_level'].features[class_column].names
+    selected_class_set = selected_hier_mapping[args.dataset_name]
+    if args.dataset_name == "./local_datasets/Donghyun99/Stanford-Cars_latents":
+        selected_class_labels = [class_set_plain.index(cls.replace("_", " ")) for cls in selected_class_set]
+    else:
+        selected_class_labels = [class_set_plain.index(cls) for cls in selected_class_set]
+    
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
             dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed)
-            idx = torch.tensor([(label in [1, 2, 3]) for label in dataset['sample_level']['label']])
+            # idx = torch.tensor([(label in [1, 2, 3]) for label in dataset['sample_level']['label']])
+            idx = torch.tensor([(label in selected_class_labels) for label in dataset['sample_level']['label']])
             idx = torch.where(idx)[0]
             # Resample idx to match args.max_train_samples size
             if len(idx) < args.max_train_samples:
@@ -353,8 +369,6 @@ def main():
                 repeat_factor = args.max_train_samples // len(idx) + 1
                 # Repeat the indices and then select the required number
                 idx = idx.repeat(repeat_factor)[:args.max_train_samples]
-            import pdb
-            pdb.set_trace()
             dataset['sample_level'] = dataset['sample_level'].select(idx)
             # if args.max_train_samples is not None:
                 # dataset['sample_level'] = dataset['sample_level'].select(range(args.max_train_samples))
@@ -363,9 +377,9 @@ def main():
         # print the label of the first 10 samples
 
     logger.info(f"Dataset size: {train_dataset.num_rows}")
-    class_set_plain = dataset['sample_level'].features[class_column].names
     train_labels = [class_set_plain[label] for label in dataset['sample_level']['label']]
-    # logger.info(f"Label of the samples: {train_labels}")
+    unique_train_labels = list(set(train_labels))
+    logger.info(f"Label of the samples: {unique_train_labels}")
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
@@ -539,24 +553,30 @@ def main():
                     torch_dtype=weight_dtype,
                     safety_checker=None
                 )
-                generated_latents = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set)[0]
-                generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
-                images_decode = pipeline.vae.decode(latents, return_dict=False, generator=None)[0]
+                with torch.no_grad():
+                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_plain)
+                    generated_latents = generated_latents_object[0]
 
-                for tracker in accelerator.trackers:
-                    if tracker.name == "wandb":
-                        tracker.log(
-                            {
-                                'original_image': [
-                                    wandb.Image(image, caption=f"{i}: the original image") for i, image in enumerate(images_decode)
-                                ],
-                                'generated_image': [
-                                    wandb.Image(image, caption=f"{i}: the decoded image") for i, image in enumerate(generated_images)
-                                ],
-                                'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
-                                'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
-                            }
-                        )
+                    generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, 
+                                                       return_dict=False, generator=None)[0]
+                    images_decode = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+
+                    for tracker in accelerator.trackers:
+                        original_labels = batch["class_labels"]
+
+                        if tracker.name == "wandb":
+                            tracker.log(
+                                {
+                                    'original_image': [
+                                        wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}: the original image") for i, image in enumerate(images_decode)
+                                    ],
+                                    'generated_image': [
+                                        wandb.Image(image, caption=f"{class_set_plain[generated_labels[i]]}: the decoded image") for i, image in enumerate(generated_images)
+                                    ],
+                                    'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
+                                    'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
+                                }
+                            )
 
                 del pipeline
                 torch.cuda.empty_cache()
