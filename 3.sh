@@ -59,7 +59,7 @@ export LAUNCHER="accelerate launch \
 
 export LAUNCHER2="accelerate launch \
     --num_processes 2 \
-    --main_process_port 29501 \
+    --main_process_port $((29500 + $RANDOM % 1000)) \
     --num_machines 1 \
     --mixed_precision bf16 \
     --dynamo_backend=no \
@@ -68,9 +68,9 @@ export LAUNCHER2="accelerate launch \
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
-# export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
+export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
 # export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
-export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
+# export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
@@ -116,7 +116,7 @@ else
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=64 \
+    --train_batch_size=32 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \

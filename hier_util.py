@@ -4,6 +4,7 @@ selected_cars = [
     "AM_General_Hummer_SUV_2000",
     "BMW_X3_SUV_2012",
     "BMW_X5_SUV_2007",
+    "Buick_Enclave_SUV_2012",
     
     # First 3 Coupes
     # "Acura_Integra_Type_R_2001",
@@ -11,9 +12,9 @@ selected_cars = [
     # "Audi_A5_Coupe_2012",
     
     # First 3 Sedans
-    "Acura_RL_Sedan_2012",
-    "Acura_TL_Sedan_2012",
-    "Acura_TL_Type-S_2008",
+    # "Acura_RL_Sedan_2012",
+    # "Acura_TL_Sedan_2012",
+    # "Acura_TL_Type-S_2008",
     
     # First 3 Hatchbacks
     # "Acura_ZDX_Hatchback_2012",
@@ -26,14 +27,14 @@ selected_cars = [
     # "Audi_RS_4_Convertible_2008",
     
     # First 3 Wagons
-    "Audi_100_Wagon_1994",
-    "BMW_3_Series_Wagon_2012",
-    "Daewoo_Nubira_Wagon_2002",
+    # "Audi_100_Wagon_1994",
+    # "BMW_3_Series_Wagon_2012",
+    # "Daewoo_Nubira_Wagon_2002",
     
     # First 3 Cabs
-    "Cadillac_Escalade_EXT_Crew_Cab_2007",
-    "Chevrolet_Avalanche_Crew_Cab_2012",
-    "Chevrolet_Silverado_1500_Classic_Extended_Cab_2007",
+    # "Cadillac_Escalade_EXT_Crew_Cab_2007",
+    # "Chevrolet_Avalanche_Crew_Cab_2012",
+    # "Chevrolet_Silverado_1500_Classic_Extended_Cab_2007",
     
     # First 3 Vans
     # "Chevrolet_Express_Cargo_Van_2007",
@@ -59,9 +60,9 @@ selected_birds = [
     # "Black_billed_Cuckoo",
     
     # First 3 from Tyrannidae family
-    "Brewer_Blackbird",
-    "Yellow_breasted_Chat",
-    "Eared_Grebe",
+    # "Brewer_Blackbird",
+    # "Yellow_breasted_Chat",
+    # "Eared_Grebe",
     
     # First 3 from Laridae family
     # "Eastern_Towhee",
@@ -69,9 +70,9 @@ selected_birds = [
     # "Gadwall",
     
     # First 3 from Vireo (Vireonidae family)
-    "Brown_Creeper",
-    "Olive_sided_Flycatcher",
-    "Frigatebird",
+    # "Brown_Creeper",
+    # "Olive_sided_Flycatcher",
+    # "Frigatebird",
     
     # First 3 from Larus (Laridae family)
     # "Horned_Grebe",
@@ -89,9 +90,9 @@ selected_birds = [
     # "Least_Tern",
     
     # First 3 from Parulidae family
-    "Least_Flycatcher",
-    "Pacific_Loon",
-    "Hooded_Oriole",
+    # "Least_Flycatcher",
+    # "Pacific_Loon",
+    # "Hooded_Oriole",
     
     # First 3 from Troglodytidae family
     # "European_Goldfinch",
@@ -99,9 +100,9 @@ selected_birds = [
     # "Clay_colored_Sparrow",
     
     # First 3 from Corvidae family
-    "Black_capped_Vireo",
-    "Chestnut_sided_Warbler",
-    "Mourning_Warbler",
+    # "Black_capped_Vireo",
+    # "Chestnut_sided_Warbler",
+    # "Mourning_Warbler",
     
     # First 3 from Fringillidae family
     # "Yellow_headed_Blackbird",
@@ -119,14 +120,14 @@ selected_birds = [
     # "White_throated_Sparrow",
     
     # First 3 from Picidae family
-    "Great_Crested_Flycatcher",
-    "Boat_tailed_Grackle",
-    "Cliff_Swallow",
+    # "Great_Crested_Flycatcher",
+    # "Boat_tailed_Grackle",
+    # "Cliff_Swallow",
     
     # First 3 from Alcidae family
-    "Ring_billed_Gull",
-    "Red_breasted_Merganser",
-    "Grasshopper_Sparrow"
+    # "Ring_billed_Gull",
+    # "Red_breasted_Merganser",
+    # "Grasshopper_Sparrow"
 ]
 
 # First 3 Pokemon for each type

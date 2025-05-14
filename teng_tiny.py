@@ -136,7 +136,7 @@ def parse_args():
     parser.add_argument("--logging_dir", type=str, default="logs", help="[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***.")
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--mixed_precision", type=str, default="no", choices=["no", "fp16", "bf16"], help="Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >= 1.10. and an Nvidia Ampere GPU.")
-    parser.add_argument("--prediction_type", type=str, default="epsilon", choices=["epsilon", "sample"], help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.")
+    parser.add_argument("--prediction_type", type=str, default="v_prediction", choices=["epsilon", "sample"], help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.")
     parser.add_argument("--ddpm_num_steps", type=int, default=1000)
     parser.add_argument("--ddpm_num_inference_steps", type=int, default=1000)
     parser.add_argument("--ddpm_beta_schedule", type=str, default="linear")
@@ -245,30 +245,35 @@ def main():
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
 
-    unet = UNet2DConditionModel(
-        sample_size=args.resolution_latent,
-        in_channels=4,
-        out_channels=4,
-        layers_per_block=2,
-        block_out_channels=(128, 256, 512, 512),
-        down_block_types=(
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "CrossAttnDownBlock2D",
-            "DownBlock2D",
-        ),
-        mid_block_type="UNetMidBlock2DCrossAttn",
-        up_block_types=(
-            "UpBlock2D",
-            "CrossAttnUpBlock2D",
-            "CrossAttnUpBlock2D",
-            "CrossAttnUpBlock2D",
-        ),
-        only_cross_attention=False, # 是否只使用交叉注意力, 而不使用自注意力
-        cross_attention_dim=class_embeddings.shape[1], # 交叉注意力维度, 此处设置为条件向量的维度
-        projection_class_embeddings_input_dim=None, # 条件向量维度
-        # class_embed_type="simple_projection", # 条件向量类型, 可选值为"simple"或"projection"
-    )
+    if True:
+        unet = UNet2DConditionModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
+        )
+    else:   
+        unet = UNet2DConditionModel(
+            sample_size=args.resolution_latent,
+            in_channels=4,
+            out_channels=4,
+            layers_per_block=2,
+            block_out_channels=(128, 256, 512, 512),
+            down_block_types=(
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "CrossAttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            mid_block_type="UNetMidBlock2DCrossAttn",
+            up_block_types=(
+                "UpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+                "CrossAttnUpBlock2D",
+            ),
+            only_cross_attention=False, # 是否只使用交叉注意力, 而不使用自注意力
+            cross_attention_dim=class_embeddings.shape[1], # 交叉注意力维度, 此处设置为条件向量的维度
+            projection_class_embeddings_input_dim=None, # 条件向量维度
+            # class_embed_type="simple_projection", # 条件向量类型, 可选值为"simple"或"projection"
+        )
 
 
     ema_model = EMAModel(
@@ -568,10 +573,10 @@ def main():
                             tracker.log(
                                 {
                                     'original_image': [
-                                        wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}: the original image") for i, image in enumerate(images_decode)
+                                        wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}") for i, image in enumerate(images_decode)
                                     ],
                                     'generated_image': [
-                                        wandb.Image(image, caption=f"{class_set_plain[generated_labels[i]]}: the decoded image") for i, image in enumerate(generated_images)
+                                        wandb.Image(image, caption=f"{class_set_plain[generated_labels[i]]}") for i, image in enumerate(generated_images)
                                     ],
                                     'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
                                     'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
