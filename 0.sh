@@ -2,9 +2,9 @@
 
 # 定义数据集数组
 datasets=(
-    # "keremberke/pokemon-classification"
+    "keremberke/pokemon-classification"
     "Donghyun99/CUB-200-2011"
-    # "Donghyun99/Stanford-Cars"
+    "Donghyun99/Stanford-Cars"
 )
 
 # 创建日志目录
@@ -21,12 +21,12 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --job-name=preprocess_${job_name}
 #SBATCH --output=logs/${job_name}_%j.log
 #SBATCH --error=logs/${job_name}_%j.log
-#SBATCH --partition=capacity
+#SBATCH --partition=gpu_a100
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=160GB
+#SBATCH --mem=100GB
 #SBATCH --time=24:00:00
 
 source activate flux
@@ -40,3 +40,7 @@ done
 
 # 清理临时脚本文件（可选）
 rm job_*.sh
+
+# srun python3 preprocess_dataset.py --dataset_name "keremberke/pokemon-classification"
+# srun python3 preprocess_dataset.py --dataset_name "Donghyun99/CUB-200-2011"
+# srun python3 preprocess_dataset.py --dataset_name "Donghyun99/Stanford-Cars"

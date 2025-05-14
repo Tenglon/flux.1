@@ -116,7 +116,7 @@ else
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=32 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -127,9 +127,9 @@ else
     --output_dir=${OUTPUT_DIR} \
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
-    --num_validation_images=32 \
-    --validation_epochs=5 \
-    --guidance_scale=7.5 \
+    --num_validation_images=8 \
+    --validation_epochs=10 \
+    --guidance_scale=4 \
     --emb_type="hyp" \
     --seed=42
 fi

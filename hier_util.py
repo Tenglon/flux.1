@@ -138,9 +138,9 @@ selected_pokemon = [
     # "Raticate",
     
     # First 3 Water type
-    "Goldeen",
-    "Seadra",
-    "Seaking",
+    # "Goldeen",
+    # "Seadra",
+    # "Seaking",
     
     # First 3 Fighting type
     # "Hitmonlee",
@@ -163,9 +163,9 @@ selected_pokemon = [
     # "Geodude",
     
     # First 3 Flying type
-    "Aerodactyl",
+    # "Aerodactyl",
     "Articuno",
-    "Fearow",
+    # "Fearow",
     
     # First 3 Ghost type
     # "Gastly",
@@ -186,19 +186,19 @@ selected_pokemon = [
     # "Cubone",
     
     # First 3 Bug type
-    "Caterpie",
-    "Metapod",
-    "Weedle",
+    # "Caterpie",
+    # "Metapod",
+    # "Weedle",
     
     # First 3 Electric type
-    "Pikachu",
-    "Raichu",
-    "Voltorb",
+    # "Pikachu",
+    # "Raichu",
+    # "Voltorb",
     
     # First 3 Fire type
-    "Flareon",
-    "Vulpix",
-    "Ninetales",
+    # "Flareon",
+    # "Vulpix",
+    # "Ninetales",
     
     # First 3 Dragon type
     # "Dratini",

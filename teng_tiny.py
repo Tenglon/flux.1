@@ -22,7 +22,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline
+from diffusers import DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel, compute_snr, cast_training_params, convert_state_dict_to_diffusers
 from diffusers.utils.import_utils import is_xformers_available
@@ -245,7 +245,7 @@ def main():
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
 
-    if True:
+    if False:
         unet = UNet2DConditionModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
         )
@@ -485,6 +485,7 @@ def main():
                 encoder_hidden_states = batch["cond_embeddings"][:, None, :] # create a new axis corresponding to sequence length
                 if torch.rand(1).item() < args.guidance_dropout_prob:
                     encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
+                encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
 
@@ -561,9 +562,11 @@ def main():
                 with torch.no_grad():
                     generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_plain)
                     generated_latents = generated_latents_object[0]
+                    # generated_latents = generated_latents * pipeline.vae.config.scaling_factor
 
                     generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, 
                                                        return_dict=False, generator=None)[0]
+                    
                     images_decode = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
 
                     for tracker in accelerator.trackers:
