@@ -22,7 +22,7 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline
+from diffusers import DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel, compute_snr, cast_training_params, convert_state_dict_to_diffusers
 from diffusers.utils.import_utils import is_xformers_available
@@ -136,9 +136,8 @@ def parse_args():
     parser.add_argument("--logging_dir", type=str, default="logs", help="[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***.")
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--mixed_precision", type=str, default="no", choices=["no", "fp16", "bf16"], help="Whether to use mixed precision. Choose between fp16 and bf16 (bfloat16). Bf16 requires PyTorch >= 1.10. and an Nvidia Ampere GPU.")
-    parser.add_argument("--prediction_type", type=str, default="v_prediction", choices=["epsilon", "sample"], help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.")
-    parser.add_argument("--ddpm_num_steps", type=int, default=1000)
-    parser.add_argument("--ddpm_num_inference_steps", type=int, default=1000)
+    parser.add_argument("--prediction_type", type=str, default="epsilon", choices=["epsilon", "sample"], help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.")
+    parser.add_argument("--sample_steps", type=int, default=1000)
     parser.add_argument("--ddpm_beta_schedule", type=str, default="linear")
     parser.add_argument("--checkpointing_steps", type=int, default=500, help="Save a checkpoint of the training state every X updates. These checkpoints are only suitable for resuming using `--resume_from_checkpoint`.")
     parser.add_argument("--checkpoints_total_limit", type=int, default=None, help="Max number of checkpoints to store.")
@@ -311,13 +310,15 @@ def main():
     # Initialize the scheduler
     accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
     if accepts_prediction_type:
-        noise_scheduler = DDPMScheduler(
-            num_train_timesteps=args.ddpm_num_steps,
+        # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
+        noise_scheduler = DDIMScheduler(
+            num_train_timesteps=args.sample_steps,
             beta_schedule=args.ddpm_beta_schedule,
             prediction_type=args.prediction_type,
         )
     else:
-        noise_scheduler = DDPMScheduler(num_train_timesteps=args.ddpm_num_steps, beta_schedule=args.ddpm_beta_schedule)
+        noise_scheduler = DDIMScheduler(num_train_timesteps=args.sample_steps, beta_schedule=args.ddpm_beta_schedule)
+        # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
@@ -485,7 +486,7 @@ def main():
                 encoder_hidden_states = batch["cond_embeddings"][:, None, :] # create a new axis corresponding to sequence length
                 if torch.rand(1).item() < args.guidance_dropout_prob:
                     encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
-                encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
+                # encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
 
@@ -560,14 +561,14 @@ def main():
                     safety_checker=None
                 )
                 with torch.no_grad():
-                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_plain)
+                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_plain, unique_train_labels=unique_train_labels)
                     generated_latents = generated_latents_object[0]
                     # generated_latents = generated_latents * pipeline.vae.config.scaling_factor
 
                     generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, 
                                                        return_dict=False, generator=None)[0]
                     
-                    images_decode = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+                    images_decode = pipeline.vae.decode(latents[:args.num_validation_images] / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
 
                     for tracker in accelerator.trackers:
                         original_labels = batch["class_labels"]

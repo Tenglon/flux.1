@@ -13,7 +13,7 @@ logger = get_logger(__name__, log_level="INFO")
 
 
 
-def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False, class_embeddings=None, class_set=None, latents=None):
+def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False, class_embeddings=None, class_set=None, latents=None, unique_train_labels=None):
     logger.info(
         f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
         f" {args.validation_prompt}."
@@ -30,14 +30,18 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
         autocast_ctx = torch.autocast(accelerator.device.type)
 
     # Use random.choices instead of random.sample to allow replacement when sample size > population
-    prompt_idxs = random.choices(range(len(class_set)), k=args.num_validation_images)
+    if unique_train_labels:
+        prompt_class_names = random.choices(unique_train_labels, k=args.num_validation_images)
+        prompt_idxs = [class_set.index(name) for name in prompt_class_names]
+    else:
+        prompt_idxs = random.choices(range(len(class_set)), k=args.num_validation_images)
     # For the limited range of 3, also use choices to allow replacement
     # prompt_idxs = random.choices(range(4), k=args.num_validation_images)
 
     # START: add class embeddings
     cond_embeddings = class_embeddings[prompt_idxs].to(accelerator.device)
     prompt_embeds = cond_embeddings[:, None, :] # [batch_size, 1, 768], where 1 is the sequence length
-    prompt_embeds = torch.zeros_like(prompt_embeds)
+    # prompt_embeds = torch.zeros_like(prompt_embeds)
     negative_prompt_embeds = torch.zeros_like(prompt_embeds)
     # classidx2name = {i: name for i, name in enumerate(class_set)}
     # prompt_labels = [classidx2name[i] for i in prompt_idxs]
@@ -46,7 +50,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     with autocast_ctx:
         generated_latents = pipeline(prompt = None, 
                              guidance_scale=args.guidance_scale, 
-                             num_inference_steps=999, 
+                             num_inference_steps=args.sample_steps, 
                              generator=generator, 
                              prompt_embeds=prompt_embeds, 
                              negative_prompt_embeds=negative_prompt_embeds,

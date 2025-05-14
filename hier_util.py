@@ -163,9 +163,9 @@ selected_pokemon = [
     # "Geodude",
     
     # First 3 Flying type
-    # "Aerodactyl",
+    "Aerodactyl",
     "Articuno",
-    # "Fearow",
+    "Fearow",
     
     # First 3 Ghost type
     # "Gastly",
@@ -196,9 +196,9 @@ selected_pokemon = [
     # "Voltorb",
     
     # First 3 Fire type
-    # "Flareon",
-    # "Vulpix",
-    # "Ninetales",
+    "Flareon",
+    "Vulpix",
+    "Charmander",
     
     # First 3 Dragon type
     # "Dratini",
