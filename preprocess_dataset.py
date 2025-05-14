@@ -96,7 +96,7 @@ if __name__ == "__main__":
 
     # Step 3: 处理类别级数据集
     if args.dataset_name == "Donghyun99/CUB-200-2011":
-        embs_prefix = './embs/cub_flat_768D'
+        embs_prefix = './embs/cub_flat_reduced_768D'
     elif args.dataset_name == "Donghyun99/Stanford-Cars":
         embs_prefix = './embs/cars_reduced_768D'
     elif args.dataset_name == "keremberke/pokemon-classification":

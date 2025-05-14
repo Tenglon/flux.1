@@ -2,9 +2,9 @@
 
 # 定义数据集数组
 datasets=(
-    "keremberke/pokemon-classification"
+    # "keremberke/pokemon-classification"
     "Donghyun99/CUB-200-2011"
-    "Donghyun99/Stanford-Cars"
+    # "Donghyun99/Stanford-Cars"
 )
 
 # 创建日志目录
