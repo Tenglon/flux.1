@@ -83,7 +83,7 @@ export USE_SBATCH=0
 
 if [ $USE_SBATCH -eq 1 ]
 then
-    srun $LAUNCHER \
+    $LAUNCHER \
     teng_tiny.py \
     --pretrained_model_name_or_path=$MODEL_NAME \
     --dataset_name=$DATASET_NAME \
@@ -91,7 +91,7 @@ then
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=64 \
+    --train_batch_size=128 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=400000 \
@@ -102,10 +102,11 @@ then
     --output_dir=${OUTPUT_DIR} \
     --checkpointing_steps=20000 \
     --validation_prompt="a photo of a" \
-    --num_validation_images=8 \
+    --num_validation_images=16 \
     --validation_epochs=10 \
     --guidance_scale=4 \
-    --emb_type="hyp" \
+    --sample_steps=250 \
+    --emb_type="oh" \
     --seed=42
 else
     $LAUNCHER2 \
@@ -131,6 +132,6 @@ else
     --validation_epochs=10 \
     --guidance_scale=4 \
     --sample_steps=250 \
-    --emb_type="oh" \
+    --emb_type="hyp" \
     --seed=42
 fi
