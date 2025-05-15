@@ -8,17 +8,24 @@ from tqdm import tqdm
 from hier_util import HierUtil
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
+from accelerate import Accelerator
+from datasets import load_from_disk
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate interpolated images between two classes")
     parser.add_argument("--model_path", type=str, default="/projects/0/prjs0774/flux.1/output/finetune/lora/runwayml/stable-diffusion-v1-5/local_datasets/keremberke/pokemon-classification_latents/checkpoint-20000", 
                         help="Path to the model checkpoint")
-    parser.add_argument("--dataset_name", type=str, default="keremberke/pokemon-classification_latents",
+    parser.add_argument("--pretrained_model_name_or_path", type=str, default='runwayml/stable-diffusion-v1-5', help="Path to pretrained model or model identifier from huggingface.co/models.")
+    parser.add_argument("--revision", type=str, default=None, required=False, help="Revision of pretrained model identifier from huggingface.co/models.")
+    parser.add_argument("--variant", type=str, default=None, help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16")
+    parser.add_argument("--dataset_name", type=str, default="./local_datasets/keremberke/pokemon-classification_latents",
                         help="Dataset name to determine which class set to use")
     parser.add_argument("--num_validation_images", type=int, default=8, 
                         help="Number of interpolation steps to generate")
-    parser.add_argument("--guidance_scale", type=float, default=7.5,
+    parser.add_argument("--guidance_scale", type=float, default=4,
                         help="Guidance scale for classifier-free guidance")
+    parser.add_argument("--emb_type", type=str, default='hyp',
+                        help="Embedding type to use")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
     parser.add_argument("--output_dir", type=str, default="interpolation_results",
@@ -40,19 +47,21 @@ def main():
     
     # Load model
     pipeline = DiffusionPipeline.from_pretrained(
-        args.model_path,
+        args.pretrained_model_name_or_path,
         torch_dtype=torch.float16,
         safety_checker=None
     ).to("cuda")
-
-    import pdb
-    pdb.set_trace()
+    
+    # Initialize accelerator for loading state
+    accelerator = Accelerator()
+    accelerator.load_state(args.model_path)
+    pipeline.unet = accelerator.unwrap_model(pipeline.unet)
     
     # Get class set based on dataset name
     dataset_mapping = {
-        "keremberke/pokemon-classification_latents": HierUtil.get_selected_pokemon,
-        "Donghyun99/CUB-200-2011_latents": HierUtil.get_selected_birds,
-        "Donghyun99/Stanford-Cars_latents": HierUtil.get_selected_cars,
+        "./local_datasets/keremberke/pokemon-classification_latents": HierUtil.get_selected_pokemon,
+        "./local_datasets/Donghyun99/CUB-200-2011_latents": HierUtil.get_selected_birds,
+        "./local_datasets/Donghyun99/Stanford-Cars_latents": HierUtil.get_selected_cars,
     }
     
     get_class_set_fn = dataset_mapping.get(args.dataset_name)
@@ -70,22 +79,25 @@ def main():
     dataset_path = Path(base_dir) / args.dataset_name / "checkpoint-20000"
     
     # Load the dataset to get class embeddings
-    from datasets import load_from_disk
-    dataset = load_from_disk(str(Path(base_dir) / args.dataset_name.split("/")[-1] + "_latents"))
+    dataset = load_from_disk(args.dataset_name)
     
     # Get class indices
-    class_set_plain = dataset['sample_level'].features['label'].names
-    
+    # class_set_plain = dataset['sample_level'].features['label'].names
+    class_set_embs = dataset['class_level_oh']['objects']
+    if args.emb_type == 'oh':
+        class_embeddings = torch.tensor(dataset['class_level_oh']['embeddings'])
+    elif args.emb_type == 'sph':
+        class_embeddings = torch.tensor(dataset['class_level_sph']['embeddings'])
+    elif args.emb_type == 'hyp':
+        class_embeddings = torch.tensor(dataset['class_level_hyp']['embeddings'])
+
     # Handle special case for Stanford-Cars dataset
-    if args.dataset_name == "Donghyun99/Stanford-Cars_latents":
-        class1_idx = class_set_plain.index(class1.replace("_", " "))
-        class2_idx = class_set_plain.index(class2.replace("_", " "))
+    if args.dataset_name == "./local_datasets/Donghyun99/Stanford-Cars_latents":
+        class1_idx = class_set_embs.index(class1.replace("_", " "))
+        class2_idx = class_set_embs.index(class2.replace("_", " "))
     else:
-        class1_idx = class_set_plain.index(class1)
-        class2_idx = class_set_plain.index(class2)
-    
-    # Get embeddings
-    class_embeddings = torch.tensor(dataset['class_level_oh']['embeddings'])
+        class1_idx = class_set_embs.index(class1)
+        class2_idx = class_set_embs.index(class2)
     
     # Get the embeddings for the two classes
     class1_embedding = class_embeddings[class1_idx]
@@ -93,29 +105,30 @@ def main():
     
     # Generate interpolated images
     images = []
-    for i in tqdm(range(args.num_validation_images)):
-        # Calculate interpolation weight
-        alpha = i / (args.num_validation_images - 1) if args.num_validation_images > 1 else 0
+    # Create interpolation weights in a vectorized way
+    alphas = torch.linspace(0, 1, args.num_validation_images)
+    
+    # Vectorized interpolation between the two class embeddings
+    interpolated_embeddings = (1 - alphas[:, None]) * class1_embedding + alphas[:, None] * class2_embedding
+    
+    # Add sequence length dimension and move to cuda
+    cond_embeddings = interpolated_embeddings.unsqueeze(1).to("cuda")
+    negative_prompt_embeds = torch.zeros_like(cond_embeddings)
         
-        # Interpolate between the two class embeddings
-        interpolated_embedding = (1 - alpha) * class1_embedding + alpha * class2_embedding
+    # Generate image
+    with torch.no_grad():
+        # import pdb
+        # pdb.set_trace()
+        latents = pipeline(
+            guidance_scale=args.guidance_scale,
+            prompt_embeds=cond_embeddings,
+            negative_prompt_embeds=negative_prompt_embeds,
+            num_inference_steps=50,
+            output_type="latent",
+        )[0]
         
-        # Add batch dimension and sequence length dimension
-        cond_embeddings = interpolated_embedding.unsqueeze(0).unsqueeze(0).to("cuda")
-        
-        # Generate image
-        with torch.no_grad():
-            latents = pipeline(
-                guidance_scale=args.guidance_scale,
-                encoder_hidden_states=cond_embeddings,
-                num_inference_steps=50,
-                output_type="latent",
-            ).images[0]
-            
-            # Decode the latents using VAE
-            latents = latents.unsqueeze(0)  # Add batch dimension
-            images = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False)[0][0]
-
+        # Decode the latents using VAE
+        images = pipeline.vae.decode(latents / pipeline.vae.config.scaling_factor, return_dict=False)[0]
     
     # Create output directory if it doesn't exist
     output_dir = Path(f"interpolation_results/{args.dataset_name}/{class1}_to_{class2}")
@@ -134,7 +147,7 @@ def main():
     image_batch = torch.stack(image_tensors)
     
     # Create a grid of images
-    grid = make_grid(image_batch, nrow=len(image_tensors), padding=2)
+    grid = make_grid(image_batch, nrow=len(image_tensors), padding=2).float()
     grid_np = grid.permute(1, 2, 0).cpu().numpy()
     
     # Create a figure to display the grid
@@ -146,7 +159,7 @@ def main():
     ax.axis('off')
     
     plt.tight_layout()
-    plt.savefig(output_dir / "interpolation_row.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / f"interpolation_row_{args.emb_type}.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"Generated {len(images)} interpolated images between {class1} and {class2}")

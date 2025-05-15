@@ -218,9 +218,9 @@ def main():
     class_column = 'label'
     latents_column = 'latents'
     
-    class_set = dataset['class_level_hyp']['objects']
-    # class_embeddings = torch.randn(len(class_set), 300)
-    # for i, name in enumerate(class_set):
+    class_set_emb = dataset['class_level_hyp']['objects']
+    # class_embeddings = torch.randn(len(class_set_emb), 300)
+    # for i, name in enumerate(class_set_emb):
         # PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
         # class_embeddings[i] = text_encoder(tokenizer(PROMPT_TEMPLATE_EMBEDDING.format(name), padding=True, return_tensors="pt").input_ids.to(accelerator.device))[1]
     if args.emb_type == "oh":
@@ -394,7 +394,10 @@ def main():
         latents = torch.stack(latents_list)
         # input_ids = torch.stack([example["input_ids"] for example in examples])
         class_labels = torch.tensor([example["class_labels"] for example in examples])
-        cond_embeddings = class_embeddings[class_labels]
+        class_names = [class_set_plain[label] for label in class_labels]
+        class_names = [name.replace(" ", "_") for name in class_names]
+        class_emb_idx = torch.tensor([class_set_emb.index(name) for name in class_names])
+        cond_embeddings = class_embeddings[class_emb_idx]
         return {"pixel_values": pixel_values, "class_labels": class_labels, "cond_embeddings": cond_embeddings, "latents": latents}
 
     # DataLoaders creation:
@@ -538,7 +541,7 @@ def main():
                         if args.checkpoints_total_limit is not None:
                             ckpt_limit(args)
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}-{args.emb_type}")
                         accelerator.save_state(save_path)
 
                         logger.info(f"Saved state to {save_path}")
@@ -561,7 +564,7 @@ def main():
                     safety_checker=None
                 )
                 with torch.no_grad():
-                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_plain, unique_train_labels=unique_train_labels)
+                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_emb, unique_train_labels=unique_train_labels)
                     generated_latents = generated_latents_object[0]
                     # generated_latents = generated_latents * pipeline.vae.config.scaling_factor
 
@@ -580,7 +583,7 @@ def main():
                                         wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}") for i, image in enumerate(images_decode)
                                     ],
                                     'generated_image': [
-                                        wandb.Image(image, caption=f"{class_set_plain[generated_labels[i]]}") for i, image in enumerate(generated_images)
+                                        wandb.Image(image, caption=f"{class_set_emb[generated_labels[i]]}") for i, image in enumerate(generated_images)
                                     ],
                                     'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
                                     'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())

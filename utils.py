@@ -32,6 +32,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     # Use random.choices instead of random.sample to allow replacement when sample size > population
     if unique_train_labels:
         prompt_class_names = random.choices(unique_train_labels, k=args.num_validation_images)
+        prompt_class_names = [name.replace(" ", "_") for name in prompt_class_names]
         prompt_idxs = [class_set.index(name) for name in prompt_class_names]
     else:
         prompt_idxs = random.choices(range(len(class_set)), k=args.num_validation_images)
