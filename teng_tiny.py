@@ -219,6 +219,9 @@ def main():
     latents_column = 'latents'
     
     class_set_emb = dataset['class_level_hyp']['objects']
+    if args.dataset_name == "./local_datasets/Donghyun99/CUB-200-2011_latents":
+        class_set_emb = [cls.replace(cls[:4], "") if cls[:3].isdigit() and cls[3] == "." else cls for cls in class_set_emb]
+
     # class_embeddings = torch.randn(len(class_set_emb), 300)
     # for i, name in enumerate(class_set_emb):
         # PROMPT_TEMPLATE_EMBEDDING = PROMPT_TEMPLATE + '{}'
@@ -541,7 +544,13 @@ def main():
                         if args.checkpoints_total_limit is not None:
                             ckpt_limit(args)
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}-{args.emb_type}")
+                        # Get the wandb run ID if wandb is being used
+                        wandb_run_id = ""
+                        for tracker in accelerator.trackers:
+                            if tracker.name == "wandb":
+                                wandb_run_id = tracker.run.id
+                        
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}-{args.emb_type}-{wandb_run_id}")
                         accelerator.save_state(save_path)
 
                         logger.info(f"Saved state to {save_path}")

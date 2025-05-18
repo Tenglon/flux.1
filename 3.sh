@@ -57,7 +57,7 @@ export LAUNCHER="accelerate launch \
     --multi_gpu \
     "
 
-    # --num_processes 2 \
+    # --num_processes 1 \
 export LAUNCHER2="accelerate launch \
     --num_processes $(nvidia-smi --list-gpus | wc -l) \
     --main_process_port $((29500 + $RANDOM % 1000)) \
@@ -70,8 +70,8 @@ export LAUNCHER2="accelerate launch \
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
 # export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
-# export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
-export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
+export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
+# export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
 # Bypass the access limit of huggingface
@@ -107,7 +107,7 @@ then
     --validation_epochs=10 \
     --guidance_scale=4 \
     --sample_steps=250 \
-    --emb_type="hyp" \
+    --emb_type="oh" \
     --seed=42
 else
     $LAUNCHER2 \
