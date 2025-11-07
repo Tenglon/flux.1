@@ -2,7 +2,6 @@ from datasets import load_dataset, concatenate_datasets, load_from_disk
 import os
 import torch
 from torchvision import transforms
-from utils import tokenize_captions, tokenize_captions2
 from transformers import CLIPTokenizer
 from diffusers import AutoencoderKL
 from datasets import DatasetDict, Dataset

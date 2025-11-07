@@ -453,11 +453,10 @@ def main():
     first_epoch, resume_step = resume_training_if_needed(args, accelerator, num_update_steps_per_epoch)
 
     # Train!
+    unet.train()
+    progress_bar = tqdm(total=max_train_steps, disable=not accelerator.is_main_process, mininterval=1)
     for epoch in range(first_epoch, num_epochs):
-        unet.train()
         train_loss = 0.0
-
-        progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process, mininterval=1)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
@@ -554,8 +553,9 @@ def main():
                         accelerator.save_state(save_path)
 
                         logger.info(f"Saved state to {save_path}")
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
+                if accelerator.is_main_process:
+                    logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+                    progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
