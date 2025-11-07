@@ -109,7 +109,32 @@ def enable_xformers(model):
         model.enable_xformers_memory_efficient_attention()
     else:
         raise ValueError("xformers is not available. Make sure it is installed correctly")
-    
+
+
+
+def build_dit_b_2_transformer(sample_size):
+    """Create a DiT transformer matching the Facebook DiT-B/2 architecture."""
+
+    dit_b_2_config = dict(
+        sample_size=sample_size,
+        patch_size=2,
+        in_channels=4,
+        out_channels=4,
+        num_attention_heads=12,
+        attention_head_dim=64,
+        num_layers=12,
+        attention_bias=True,
+        activation_fn="gelu-approximate",
+        num_embeds_ada_norm=1000,
+        num_vector_embeds=1000,
+        class_dropout_prob=0.1,
+        time_embedding_type="fourier",
+        use_linear_projection=False,
+        use_temporal_attention=False,
+    )
+
+    return DiTTransformer2DModel(**dit_b_2_config)
+
 
 
 
@@ -278,9 +303,18 @@ def main():
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
 
-    transformer = DiTTransformer2DModel.from_pretrained(
-        args.transformer_model_name_or_path, revision=args.revision, variant=args.variant
+    if args.transformer_model_name_or_path:
+        logger.info(
+            "Argument --transformer_model_name_or_path=%s is ignored; using a freshly initialized DiT-B/2 instead.",
+            args.transformer_model_name_or_path,
+        )
+
+    transformer_sample_size = args.resolution_latent
+    logger.info(
+        "Initializing a DiT-B/2 sized transformer from scratch (sample_size=%s, patch_size=2).",
+        transformer_sample_size,
     )
+    transformer = build_dit_b_2_transformer(sample_size=transformer_sample_size)
 
 
     ema_model = EMAModel(
