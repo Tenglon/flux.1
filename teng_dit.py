@@ -119,6 +119,12 @@ def parse_args():
     parser.add_argument("--dataset_config_name", type=str, default=None, help="The config of the Dataset, leave as None if there's only one config.")
 
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None, required=True, help="Path to pretrained model or model identifier from huggingface.co/models.")
+    parser.add_argument(
+        "--transformer_model_name_or_path",
+        type=str,
+        default="facebook/DiT-B-2-256x256",
+        help="Path to the DiT transformer weights to use instead of the SD3 DiT. Defaults to the 110M parameter DiT/B-2.",
+    )
     parser.add_argument("--revision", type=str, default=None, required=False, help="Revision of pretrained model identifier from huggingface.co/models.")
     parser.add_argument("--variant", type=str, default=None, help="Variant of the model files of the pretrained model identifier from huggingface.co/models, 'e.g.' fp16")
 
@@ -273,7 +279,7 @@ def main():
     )
 
     transformer = DiTTransformer2DModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
+        args.transformer_model_name_or_path, revision=args.revision, variant=args.variant
     )
 
 
