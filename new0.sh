@@ -9,6 +9,7 @@ datasets=(
 
 # 创建日志目录
 mkdir -p logs
+rm -rf logs/*
 
 # 循环处理每个数据集
 for dataset in "${datasets[@]}"; do
@@ -21,17 +22,18 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --job-name=preprocess_${job_name}
 #SBATCH --output=logs/${job_name}_%j.log
 #SBATCH --error=logs/${job_name}_%j.log
-#SBATCH --partition=small-g
+#SBATCH --partition=standard-g
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=100GB
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=60GB
+#SBATCH --time=03:00:00
+#SBATCH --account=project_465001640   # Project for billing 
 
-source activate flux
+
 # srun python3 preprocess_dataset.py --dataset_name ${dataset}
-singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/rocket_v1.sif python3 preprocess_dataset.py --dataset_name ${dataset}
+singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ python3 preprocess_dataset.py --dataset_name ${dataset}
 EOF
 
     # 提交作业
