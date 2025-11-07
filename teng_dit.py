@@ -81,6 +81,22 @@ def registor_new_accelerate(args, accelerator, ema_model):
         accelerator.register_load_state_pre_hook(load_model_hook)
 
 
+def _prepare_wandb_images(image_batch, captions):
+    """Convert a batch of image tensors into wandb.Image objects with captions."""
+    if image_batch is None or len(image_batch) == 0:
+        return []
+
+    images = image_batch.detach().float().cpu()
+    images = (images / 2 + 0.5).clamp(0, 1)
+
+    wandb_images = []
+    for img_tensor, caption in zip(images, captions):
+        img_np = img_tensor.permute(1, 2, 0).numpy()
+        wandb_images.append(wandb.Image(img_np, caption=caption))
+
+    return wandb_images
+
+
 def enable_xformers(model):
     if is_xformers_available():
         import xformers
@@ -555,30 +571,70 @@ def main():
                     torch_dtype=weight_dtype,
                 )
                 with torch.no_grad():
-                    generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_emb, unique_train_labels=unique_train_labels)
+                    generated_latents_object, generated_labels = log_validation(
+                        pipeline,
+                        args,
+                        accelerator,
+                        epoch,
+                        class_embeddings=class_embeddings,
+                        class_set=class_set_emb,
+                        unique_train_labels=unique_train_labels,
+                    )
                     generated_latents = generated_latents_object[0]
-                    # generated_latents = generated_latents * pipeline.vae.config.scaling_factor
 
-                    generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, 
-                                                       return_dict=False, generator=None)[0]
-                    
-                    images_decode = pipeline.vae.decode(latents[:args.num_validation_images] / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+                    vae_dtype = pipeline.vae.dtype
+                    generated_latents = generated_latents.to(vae_dtype)
+                    generated_images = pipeline.vae.decode(
+                        generated_latents / pipeline.vae.config.scaling_factor,
+                        return_dict=False,
+                        generator=None,
+                    )[0]
+
+                    reference_latents = latents[: args.num_validation_images].to(vae_dtype)
+                    images_decode = pipeline.vae.decode(
+                        reference_latents / pipeline.vae.config.scaling_factor,
+                        return_dict=False,
+                        generator=None,
+                    )[0]
+
+                    generated_latents_cpu = generated_latents.detach().float().cpu()
+                    reference_latents_cpu = reference_latents.detach().float().cpu()
 
                     for tracker in accelerator.trackers:
-                        original_labels = batch["class_labels"]
-
                         if tracker.name == "wandb":
+                            original_labels = (
+                                batch["class_labels"][: args.num_validation_images]
+                                .detach()
+                                .cpu()
+                                .tolist()
+                            )
+
+                            num_generated = min(len(generated_labels), generated_images.shape[0])
+                            num_original = min(len(original_labels), images_decode.shape[0])
+
+                            generated_captions = [
+                                class_set_emb[idx] for idx in generated_labels[:num_generated]
+                            ]
+                            original_captions = [
+                                class_set_plain[idx] for idx in original_labels[:num_original]
+                            ]
+
                             tracker.log(
                                 {
-                                    'original_image': [
-                                        wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}") for i, image in enumerate(images_decode)
-                                    ],
-                                    'generated_image': [
-                                        wandb.Image(image, caption=f"{class_set_emb[generated_labels[i]]}") for i, image in enumerate(generated_images)
-                                    ],
-                                    'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
-                                    'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
-                                }
+                                    "validation/original_image": _prepare_wandb_images(
+                                        images_decode[:num_original], original_captions
+                                    ),
+                                    "validation/generated_image": _prepare_wandb_images(
+                                        generated_images[:num_generated], generated_captions
+                                    ),
+                                    "validation/latents_histogram": wandb.Histogram(
+                                        reference_latents_cpu.numpy().flatten()
+                                    ),
+                                    "validation/generated_latents_histogram": wandb.Histogram(
+                                        generated_latents_cpu.numpy().flatten()
+                                    ),
+                                },
+                                step=global_step,
                             )
 
                 del pipeline
@@ -608,7 +664,47 @@ def main():
             pipeline.transformer = unwrapped_transformer
 
             # run inference
-            images = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set, is_final_validation=True)
+            with torch.no_grad():
+                generated_latents_object, generated_labels = log_validation(
+                    pipeline,
+                    args,
+                    accelerator,
+                    epoch,
+                    class_embeddings=class_embeddings,
+                    class_set=class_set_emb,
+                    unique_train_labels=unique_train_labels,
+                    is_final_validation=True,
+                )
+                generated_latents = generated_latents_object[0].to(pipeline.vae.dtype)
+                generated_images = pipeline.vae.decode(
+                    generated_latents / pipeline.vae.config.scaling_factor,
+                    return_dict=False,
+                    generator=None,
+                )[0]
+
+                generated_latents_cpu = generated_latents.detach().float().cpu()
+
+                num_generated = min(len(generated_labels), generated_images.shape[0])
+                generated_captions = [
+                    class_set_emb[idx] for idx in generated_labels[:num_generated]
+                ]
+
+                for tracker in accelerator.trackers:
+                    if tracker.name == "wandb":
+                        tracker.log(
+                            {
+                                "validation/final_generated_image": _prepare_wandb_images(
+                                    generated_images[:num_generated], generated_captions
+                                ),
+                                "validation/final_generated_latents_histogram": wandb.Histogram(
+                                    generated_latents_cpu.numpy().flatten()
+                                ),
+                            },
+                            step=global_step,
+                        )
+
+            del pipeline
+            torch.cuda.empty_cache()
 
 
     accelerator.end_training()
