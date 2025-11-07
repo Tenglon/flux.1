@@ -22,9 +22,16 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
-from diffusers import DDPMScheduler, UNet2DModel, UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline, DiffusionPipeline, DPMSolverMultistepScheduler, DDIMScheduler
+from diffusers import (
+    DDPMScheduler,
+    AutoencoderKL,
+    DiTPipeline,
+    DPMSolverMultistepScheduler,
+    DDIMScheduler,
+    DiTTransformer2DModel,
+)
 from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel, compute_snr, cast_training_params, convert_state_dict_to_diffusers
+from diffusers.training_utils import EMAModel, compute_snr
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 
@@ -42,17 +49,19 @@ def registor_new_accelerate(args, accelerator, ema_model):
         def save_model_hook(models, weights, output_dir):
             if accelerator.is_main_process:
                 if args.use_ema:
-                    ema_model.save_pretrained(os.path.join(output_dir, "unet_ema"))
+                    ema_model.save_pretrained(os.path.join(output_dir, "transformer_ema"))
 
                 for i, model in enumerate(models):
-                    model.save_pretrained(os.path.join(output_dir, "unet"))
+                    model.save_pretrained(os.path.join(output_dir, "transformer"))
 
                     # make sure to pop weight so that corresponding model is not saved again
                     weights.pop()
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DModel)
+                load_model = EMAModel.from_pretrained(
+                    os.path.join(input_dir, "transformer_ema"), DiTTransformer2DModel
+                )
                 ema_model.load_state_dict(load_model.state_dict())
                 ema_model.to(accelerator.device)
                 del load_model
@@ -62,7 +71,7 @@ def registor_new_accelerate(args, accelerator, ema_model):
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DModel.from_pretrained(input_dir, subfolder="unet")
+                load_model = DiTTransformer2DModel.from_pretrained(input_dir, subfolder="transformer")
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -247,45 +256,19 @@ def main():
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
 
-    if True:
-        unet = UNet2DConditionModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
-        )
-    else:   
-        unet = UNet2DConditionModel(
-            sample_size=args.resolution_latent,
-            in_channels=4,
-            out_channels=4,
-            layers_per_block=2,
-            block_out_channels=(128, 256, 512, 512),
-            down_block_types=(
-                "CrossAttnDownBlock2D",
-                "CrossAttnDownBlock2D",
-                "CrossAttnDownBlock2D",
-                "DownBlock2D",
-            ),
-            mid_block_type="UNetMidBlock2DCrossAttn",
-            up_block_types=(
-                "UpBlock2D",
-                "CrossAttnUpBlock2D",
-                "CrossAttnUpBlock2D",
-                "CrossAttnUpBlock2D",
-            ),
-            only_cross_attention=False, # 是否只使用交叉注意力, 而不使用自注意力
-            cross_attention_dim=class_embeddings.shape[1], # 交叉注意力维度, 此处设置为条件向量的维度
-            projection_class_embeddings_input_dim=None, # 条件向量维度
-            # class_embed_type="simple_projection", # 条件向量类型, 可选值为"simple"或"projection"
-        )
+    transformer = DiTTransformer2DModel.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="transformer", revision=args.revision, variant=args.variant
+    )
 
 
     ema_model = EMAModel(
-            unet.parameters(),
+            transformer.parameters(),
             decay=args.ema_max_decay,
             use_ema_warmup=True,
             inv_gamma=args.ema_inv_gamma,
             power=args.ema_power,
-            model_cls=UNet2DConditionModel,
-            model_config=unet.config,
+            model_cls=DiTTransformer2DModel,
+            model_config=transformer.config,
         )
     
     # `accelerate` 0.16.0 will have better support for customized saving
@@ -293,22 +276,22 @@ def main():
 
     # freeze parameters of models to save more memory
 
-    unet.requires_grad_(True)
+    transformer.requires_grad_(True)
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
 
     weight_dtype = set_mixed_precision(args, accelerator)
 
-    # Move unet, vae and text_encoder to device and cast to weight_dtype
+    # Move transformer, vae and text_encoder to device and cast to weight_dtype
     ema_model.to(accelerator.device, dtype=weight_dtype)
-    unet.to(accelerator.device, dtype=weight_dtype)
+    transformer.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     if args.enable_xformers_memory_efficient_attention:
-        enable_xformers(unet)
+        enable_xformers(transformer)
 
-    # lora_layers = filter(lambda p: p.requires_grad, unet.parameters())
+    # lora_layers = filter(lambda p: p.requires_grad, transformer.parameters())
 
     # Initialize the scheduler
     accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
@@ -325,7 +308,7 @@ def main():
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
-        unet.parameters(),
+        transformer.parameters(),
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -420,8 +403,8 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, optimizer, train_dataloader, lr_scheduler
+    transformer, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        transformer, optimizer, train_dataloader, lr_scheduler
     )
 
     if args.use_ema:
@@ -453,13 +436,14 @@ def main():
     first_epoch, resume_step = resume_training_if_needed(args, accelerator, num_update_steps_per_epoch)
 
     # Train!
-    unet.train()
-    progress_bar = tqdm(total=max_train_steps, disable=not accelerator.is_main_process, mininterval=1)
     for epoch in range(first_epoch, num_epochs):
+        transformer.train()
         train_loss = 0.0
+
+        progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process, mininterval=1)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet):
+            with accelerator.accumulate(transformer):
                 # Skip steps until we reach the resumed step
                 if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                     if step % args.gradient_accumulation_steps == 0:
@@ -493,7 +477,7 @@ def main():
                     encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
                 # encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+                model_pred = transformer(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -523,7 +507,7 @@ def main():
 
                 # Backpropagate BUGGY.
                 # if accelerator.sync_gradients:
-                    # accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+                    # accelerator.clip_grad_norm_(transformer.parameters(), args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -531,7 +515,7 @@ def main():
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 if args.use_ema:
-                    ema_model.step(unet.parameters())
+                    ema_model.step(transformer.parameters())
                 progress_bar.update(1)
                 global_step += 1
                 accelerator.log({"train_loss": train_loss}, step=global_step)
@@ -553,9 +537,8 @@ def main():
                         accelerator.save_state(save_path)
 
                         logger.info(f"Saved state to {save_path}")
-                if accelerator.is_main_process:
-                    logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-                    progress_bar.set_postfix(**logs)
+            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
@@ -564,13 +547,12 @@ def main():
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
                 # create pipeline
 
-                pipeline = DiffusionPipeline.from_pretrained(
+                pipeline = DiTPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
-                    unet=unwrap_model(unet),
+                    transformer=unwrap_model(transformer),
                     revision=args.revision,
                     variant=args.variant,
                     torch_dtype=weight_dtype,
-                    safety_checker=None
                 )
                 with torch.no_grad():
                     generated_latents_object, generated_labels = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set_emb, unique_train_labels=unique_train_labels)
@@ -605,29 +587,25 @@ def main():
     # Save the lora layers
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        unet = unet.to(torch.float32)
-        unwrapped_unet = unwrap_model(unet)
+        transformer = transformer.to(torch.float32)
+        unwrapped_transformer = unwrap_model(transformer)
         
         # Save full model weights
-        # unet_state_dict = convert_state_dict_to_diffusers(unwrapped_unet.state_dict())
-        StableDiffusionPipeline.save_pretrained(
-            save_directory=args.output_dir,
-            unet=unwrapped_unet,
-            safe_serialization=True,
+        unwrapped_transformer.save_pretrained(
+            os.path.join(args.output_dir, "transformer"), safe_serialization=True
         )
 
         # Final inference
         # Load previous pipeline
         if args.validation_prompt is not None:
-            pipeline = DiffusionPipeline.from_pretrained(
+            pipeline = DiTPipeline.from_pretrained(
                 args.pretrained_model_name_or_path,
                 revision=args.revision,
                 variant=args.variant,
                 torch_dtype=weight_dtype,
-                safety_checker=None
             )
 
-            pipeline.unet = unwrapped_unet
+            pipeline.transformer = unwrapped_transformer
 
             # run inference
             images = log_validation(pipeline, args, accelerator, epoch, class_embeddings=class_embeddings, class_set=class_set, is_final_validation=True)

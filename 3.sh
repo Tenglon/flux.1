@@ -57,15 +57,16 @@ export LAUNCHER="accelerate launch \
     --multi_gpu \
     "
 
-    # --num_processes 1 \
+    # --num_processes $(nvidia-smi --list-gpus | wc -l) \
 export LAUNCHER2="accelerate launch \
-    --num_processes $(nvidia-smi --list-gpus | wc -l) \
+    --num_processes 6 \
     --main_process_port $((29500 + $RANDOM % 1000)) \
     --num_machines 1 \
     --mixed_precision bf16 \
     --dynamo_backend=no \
     "
 
+export CUDA_VISIBLE_DEVICES=0,1,2,3,5,6
 # Training Environment variables
 export MODEL_NAME="runwayml/stable-diffusion-v1-5"
 # export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
@@ -78,7 +79,6 @@ export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 # export HF_ENDPOINT=https://hf-api.gitee.com
 # export HF_HOME=~/.cache/gitee-ai
 
-# export CUDA_VISIBLE_DEVICES=0,1
 
 export USE_SBATCH=0
 
@@ -118,7 +118,7 @@ else
     --dataloader_num_workers=8 \
     --resolution=256 --center_crop --random_flip \
     --resolution_latent=32 \
-    --train_batch_size=128 \
+    --train_batch_size=64 \
     --gradient_accumulation_steps=1 \
     --mixed_precision="bf16" \
     --max_train_steps=20000 \
