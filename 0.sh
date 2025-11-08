@@ -31,7 +31,7 @@ for dataset in "${datasets[@]}"; do
 
 source activate flux
 # srun python3 preprocess_dataset.py --dataset_name ${dataset}
-singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/rocket_v1.sif python3 preprocess_dataset.py --dataset_name ${dataset}
+singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ python3 preprocess_dataset.py --dataset_name ${dataset}
 EOF
 
     # 提交作业

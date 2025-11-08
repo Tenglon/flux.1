@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=120GB
 #SBATCH --time=48:00:00
-#SBATCH --account=project_465001640   # Project for billing 
+#SBATCH --account=project_465002133   # Project for billing 
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=uestc.longteng@gmail.com
 
@@ -47,10 +47,11 @@ export NCCL_SHM_DISABLE=0
 # export HF_HOME=~/.cache/gitee-ai
 
 # Training Environment variables
-export MODEL_NAME="sd-legacy/stable-diffusion-v1-5"
-# export MODEL_NAME="black-forest-labs/FLUX.1-schnell"
+# export MODEL_NAME="stabilityai/stable-diffusion-2-1"
 # export DATASET_NAME="./local_datasets/keremberke/pokemon-classification_latents"
 # export DATASET_NAME="./local_datasets/Donghyun99/CUB-200-2011_latents"
+# export MODEL_NAME="sd-legacy/stable-diffusion-v1-5"
+export MODEL_NAME="stabilityai/stable-diffusion-3-medium-diffusers"
 export DATASET_NAME="./local_datasets/Donghyun99/Stanford-Cars_latents"
 export OUTPUT_DIR="./output/finetune/lora/${MODEL_NAME}/${DATASET_NAME}"
 
@@ -87,7 +88,7 @@ singularity exec \
             --machine_rank \${SLURM_NODEID} \
             --main_process_ip $MASTER_ADDR \
             --main_process_port $MASTER_PORT \
-            teng_tiny.py \
+            teng_dit.py \
                 --pretrained_model_name_or_path=$MODEL_NAME \
                 --dataset_name=$DATASET_NAME \
                 --max_train_samples=18000 \
@@ -105,7 +106,7 @@ singularity exec \
                 --output_dir=${OUTPUT_DIR} \
                 --checkpointing_steps=1000 \
                 --num_validation_images=16 \
-                --validation_epochs=10 \
+                --validation_epochs=100 \
                 --guidance_scale=4 \
                 --sample_steps=250 \
                 --emb_type="hyp" \

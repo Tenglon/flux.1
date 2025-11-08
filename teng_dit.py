@@ -111,6 +111,10 @@ def enable_xformers(model):
         raise ValueError("xformers is not available. Make sure it is installed correctly")
 
 
+import torch, torch.nn as nn
+from diffusers.models.normalization import AdaLayerNormZero
+from diffusers.models.embeddings import CombinedTimestepLabelEmbeddings
+
 
 def build_dit_b_2_transformer(sample_size):
     """Create a DiT transformer matching the Facebook DiT-B/2 architecture."""
@@ -126,14 +130,22 @@ def build_dit_b_2_transformer(sample_size):
         attention_bias=True,
         activation_fn="gelu-approximate",
         num_embeds_ada_norm=1000,
-        num_vector_embeds=1000,
-        class_dropout_prob=0.1,
-        time_embedding_type="fourier",
-        use_linear_projection=False,
-        use_temporal_attention=False,
     )
 
-    return DiTTransformer2DModel(**dit_b_2_config)
+    dit_s_4_config = dict(
+        sample_size=sample_size,
+        patch_size=4,
+        in_channels=4,  
+        out_channels=4,
+        num_attention_heads=6,
+        attention_head_dim=64,
+        num_layers=12,
+        attention_bias=True,
+        activation_fn="gelu-approximate",
+        num_embeds_ada_norm=1000,
+    )
+
+    return DiTTransformer2DModel(**dit_s_4_config)
 
 
 
@@ -492,11 +504,11 @@ def main():
     first_epoch, resume_step = resume_training_if_needed(args, accelerator, num_update_steps_per_epoch)
 
     # Train!
+    progress_bar = tqdm(total=max_train_steps, disable=not accelerator.is_main_process, mininterval=1)
+    transformer.train()
     for epoch in range(first_epoch, num_epochs):
-        transformer.train()
         train_loss = 0.0
 
-        progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process, mininterval=1)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(transformer):
@@ -533,7 +545,7 @@ def main():
                     encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
                 # encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
-                model_pred = transformer(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+                model_pred = transformer(noisy_latents, timesteps, batch['class_labels'], return_dict=False)[0]
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
