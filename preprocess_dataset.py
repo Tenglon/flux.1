@@ -1,16 +1,21 @@
 from datasets import load_dataset, concatenate_datasets, load_from_disk
 import os
 import torch
+from torch.utils.data import Dataset as TorchDataset
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import CLIPTokenizer
 from diffusers import AutoencoderKL
 from datasets import DatasetDict, Dataset
+from accelerate import Accelerator
+from tqdm.auto import tqdm
 import argparse
-
+import PIL
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--pretrained_model_name_or_path", type=str, default="runwayml/stable-diffusion-v1-5")
+# parser.add_argument("--pretrained_model_name_or_path", type=str, default="runwayml/stable-diffusion-v1-5")
+parser.add_argument("--pretrained_model_name_or_path", type=str, default="stabilityai/stable-diffusion-3-medium-diffusers")
 parser.add_argument("--resolution", type=int, default=256)
 parser.add_argument("--dataset_name", type=str, default="keremberke/pokemon-classification")
 # parser.add_argument("--dataset_name", type=str, default="Donghyun99/Stanford-Cars")
@@ -46,28 +51,28 @@ train_transforms = transforms.Compose(
     ]
 )
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-tokenizer = CLIPTokenizer.from_pretrained(
-    args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
-)
-vae = AutoencoderKL.from_pretrained(
-    args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
-)
-vae.to(device)
-
-def preprocess_train(examples):
-    images = [image.convert("RGB") for image in examples[image_column]]
-    pixel_values = [train_transforms(image) for image in images]
-    # new_examples["input_ids"] = tokenize_captions2(tokenizer, examples, class_column, PROMPT_TEMPLATE)
-    # new_examples["class_labels"] = examples[class_column]
-    pixel_values = torch.stack(pixel_values)
-    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float().to(device)
-    latents = vae.encode(pixel_values).latent_dist.sample()
-    latents = latents * vae.config.scaling_factor
-    examples["latents"] = latents
-    return examples
+# 自定义 PyTorch Dataset 类
+class ImageDataset(TorchDataset):
+    def __init__(self, hf_dataset, image_column, class_column, transform):
+        self.hf_dataset = hf_dataset
+        self.image_column = image_column
+        self.class_column = class_column
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.hf_dataset)
+    
+    def __getitem__(self, idx):
+        item = self.hf_dataset[idx]
+        image = item[self.image_column]
+        image = image.convert("RGB")
+        pixel_values = self.transform(image)
+        label = item[self.class_column]
+        return {
+            "idx": idx,
+            "pixel_values": pixel_values,
+            "label": label,
+        }
 
 
 
@@ -111,18 +116,126 @@ if __name__ == "__main__":
     class_level_dataset_oh['embeddings'] = torch.eye(len(class_level_dataset_hyp['objects']))
     class_level_dataset_oh = Dataset.from_dict(class_level_dataset_oh)
 
-    # Step 4: 处理样本级数据集
-    dataset = full_dataset.map(preprocess_train, batched=True, batch_size=args.train_batch_size, num_proc=args.dataloader_num_workers, desc="处理数据集中...")
+    # Step 4: 处理样本级数据集 - 使用 DataLoader + Accelerator 多 GPU 并行
+    accelerator = Accelerator()
+    
+    # 初始化 VAE（每个进程都需要加载）
+    vae = AutoencoderKL.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+    )
+    # 手动将 VAE 移动到对应设备（不使用 prepare，因为这是推理模型）
+    vae.to(accelerator.device)
+    vae.eval()
+    
+    # 创建 PyTorch Dataset 和 DataLoader
+    image_dataset = ImageDataset(full_dataset, image_column, class_column, train_transforms)
+    dataloader = DataLoader(
+        image_dataset,
+        batch_size=args.train_batch_size,
+        shuffle=False,
+        num_workers=args.dataloader_num_workers,
+        pin_memory=True,
+    )
+    
+    # 只对 DataLoader 使用 accelerator 准备（VAE 已经手动移动到设备）
+    dataloader = accelerator.prepare(dataloader)
+    
+    # 处理数据 - 每个进程处理分配给它的数据
+    all_latents = {}
+    all_images = {}
+    all_labels = {}
+    if accelerator.is_main_process:
+        progress_bar = tqdm(total=len(dataloader), desc="处理数据集中...")
+    
+    with torch.no_grad():
+        for batch in dataloader:
+            pixel_values_batch = batch["pixel_values"]
+            labels_batch = batch["label"]
+            # 确保数据在正确的设备上
+            pixel_values_batch = pixel_values_batch.to(accelerator.device)
+            pixel_values_batch = pixel_values_batch.to(memory_format=torch.contiguous_format).float()
+            indices = batch["idx"]
+            
+            # 编码为 latent
+            latents = vae.encode(pixel_values_batch).latent_dist.sample()
+            latents = latents * vae.config.scaling_factor
+            
+            # 收集每个样本的 latent、pixel_values 和 label（移到 CPU 并转换为 numpy）
+            for i, idx in enumerate(indices):
+                idx = idx.item()
+                all_latents[idx] = latents[i].cpu().numpy()
+                # 将 CHW (3x256x256) 转换为 HWC (256x256x3)，并将值范围从 [-1,1] 转换回 [0,1]
+                img_tensor = pixel_values_batch[i].cpu().permute(1, 2, 0)  # CHW -> HWC
+                img_tensor = (img_tensor + 1) / 2  # [-1,1] -> [0,1]
+                img_tensor = torch.clamp(img_tensor, 0, 1)  # 确保值在 [0,1] 范围内
+                img_array = (img_tensor.numpy() * 255).astype('uint8')  # 转换为 uint8 [0,255]
+                all_images[idx] = PIL.Image.fromarray(img_array)
+                all_labels[idx] = labels_batch[i].item() if torch.is_tensor(labels_batch[i]) else labels_batch[i]
+            
+            if accelerator.is_main_process:
+                progress_bar.update(1)
+    
+    if accelerator.is_main_process:
+        progress_bar.close()
+    
+    # 同步所有进程
+    accelerator.wait_for_everyone()
+    
+    # 收集所有进程的结果到主进程
+    from accelerate.utils import gather_object
+    all_gathered_latents = gather_object([all_latents])
+    all_gathered_images = gather_object([all_images])
+    all_gathered_labels = gather_object([all_labels])
+    
+    # 在主进程上合并所有数据
+    if accelerator.is_main_process:
+        # 合并所有进程收集的数据
+        merged_latents = {}
+        merged_images = {}
+        merged_labels = {}
+        
+        for proc_latents in tqdm(all_gathered_latents, desc="合并 latent"):
+            if proc_latents:  # 确保不是 None
+                merged_latents.update(proc_latents)
+        
+        for proc_images in tqdm(all_gathered_images, desc="合并 images"):
+            if proc_images:  # 确保不是 None
+                merged_images.update(proc_images)
+        
+        for proc_labels in tqdm(all_gathered_labels, desc="合并 labels"):
+            if proc_labels:  # 确保不是 None
+                merged_labels.update(proc_labels)
+        
+        # 使用生成器在线构建数据集，避免一次性加载所有数据到内存
+        progress_bar = tqdm(total=len(full_dataset), desc="构建数据集")
+        def data_generator():
+            for i in range(len(full_dataset)):
+                yield {
+                    "latents": merged_latents[i].tolist(),
+                    "images": merged_images[i],
+                    "labels": merged_labels[i]
+                }
+                progress_bar.update(1)
+        
+        dataset = Dataset.from_generator(data_generator)
+        progress_bar.close()
+    else:
+        dataset = None
+    
+    # 等待主进程完成
+    accelerator.wait_for_everyone()
+    
+    # 只在主进程上继续后续步骤
+    if accelerator.is_main_process:
+        # step5: 创建数据集
+        dataset_dict = DatasetDict({
+            'sample_level': dataset,  # n_samples rows
+            'class_level_hyp': class_level_dataset_hyp,        # n_classes rows
+            'class_level_sph': class_level_dataset_sph,        # n_classes rows
+            'class_level_oh': class_level_dataset_oh        # n_classes rows
+        })
 
-    # step5: 创建数据集
-    dataset_dict = DatasetDict({
-        'sample_level': dataset,  # n_samples rows
-        'class_level_hyp': class_level_dataset_hyp,        # n_classes rows
-        'class_level_sph': class_level_dataset_sph,        # n_classes rows
-        'class_level_oh': class_level_dataset_oh        # n_classes rows
-    })
-
-    dataset_dict.save_to_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
-    # load dataset
-    load_dataset = load_from_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
-    print(load_dataset)
+        dataset_dict.save_to_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
+        # load dataset
+        load_dataset = load_from_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
+        print(load_dataset)

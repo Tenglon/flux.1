@@ -30,8 +30,8 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --time=24:00:00
 
 source activate flux
-# srun python3 preprocess_dataset.py --dataset_name ${dataset}
-singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ python3 preprocess_dataset.py --dataset_name ${dataset}
+# srun accelerate launch --multi-gpu --num_processes 4 preprocess_dataset.py --dataset_name ${dataset}
+singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ accelerate launch --multi-gpu --num_processes 4 preprocess_dataset.py --dataset_name ${dataset}
 EOF
 
     # 提交作业
