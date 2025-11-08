@@ -247,7 +247,7 @@ def main():
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
 
-    if True:
+    if False:
         unet = UNet2DConditionModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
         )

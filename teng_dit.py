@@ -132,9 +132,9 @@ def build_dit_b_2_transformer(sample_size):
         num_embeds_ada_norm=1000,
     )
 
-    dit_s_4_config = dict(
+    dit_s_2_config = dict(
         sample_size=sample_size,
-        patch_size=4,
+        patch_size=2,
         in_channels=4,  
         out_channels=4,
         num_attention_heads=6,
@@ -145,7 +145,7 @@ def build_dit_b_2_transformer(sample_size):
         num_embeds_ada_norm=1000,
     )
 
-    return DiTTransformer2DModel(**dit_s_4_config)
+    return DiTTransformer2DModel(**dit_s_2_config)
 
 
 
@@ -265,6 +265,9 @@ def main():
         kwargs_handlers=[kwargs],
     )
 
+    if torch.cuda.is_available():                 # ROCm 也用 torch.cuda 接口
+        torch.cuda.set_device(accelerator.local_process_index)
+
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -323,7 +326,7 @@ def main():
 
     transformer_sample_size = args.resolution_latent
     logger.info(
-        "Initializing a DiT-B/2 sized transformer from scratch (sample_size=%s, patch_size=2).",
+        "Initializing a DiT-S/4 sized transformer from scratch (sample_size=%s, patch_size=4).",
         transformer_sample_size,
     )
     transformer = build_dit_b_2_transformer(sample_size=transformer_sample_size)
@@ -461,6 +464,9 @@ def main():
         collate_fn=collate_fn,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
+        pin_memory=True,
+        persistent_workers=args.dataloader_num_workers > 0,
+        prefetch_factor=2 if args.dataloader_num_workers > 0 else None,
     )
     # Initialize the learning rate scheduler
     lr_scheduler = get_scheduler(
@@ -471,13 +477,16 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    transformer, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        transformer, optimizer, train_dataloader, lr_scheduler
+    transformer, ema_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        transformer, ema_model, optimizer, train_dataloader, lr_scheduler
     )
 
     if args.use_ema:
         ema_model.to(accelerator.device)
 
+    logger.info(f"RANK={accelerator.process_index} LOCAL_RANK={accelerator.local_process_index} "
+                f"DEVICE={accelerator.device} WORLD_SIZE={accelerator.num_processes}",
+                extra={"main_process_only": False})
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
@@ -518,7 +527,10 @@ def main():
                         progress_bar.update(1)
                     continue
 
-                latents = batch["latents"].to(weight_dtype)
+                latents = batch["latents"].to(accelerator.device, dtype=weight_dtype, non_blocking=True)
+                class_labels = batch["class_labels"].to(accelerator.device, non_blocking=True)
+                if torch.rand(1).item() < args.guidance_dropout_prob:
+                    class_labels = torch.zeros_like(class_labels)
 
                 # Sample noise that we'll add to the images
                 noise = torch.randn(latents.shape, dtype=weight_dtype, device=latents.device)
@@ -530,7 +542,6 @@ def main():
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
-                    # set prediction_type of scheduler if defined
                     noise_scheduler.register_to_config(prediction_type=args.prediction_type)
 
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -540,12 +551,7 @@ def main():
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                encoder_hidden_states = batch["cond_embeddings"][:, None, :] # create a new axis corresponding to sequence length
-                if torch.rand(1).item() < args.guidance_dropout_prob:
-                    encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
-                # encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
-
-                model_pred = transformer(noisy_latents, timesteps, batch['class_labels'], return_dict=False)[0]
+                model_pred = transformer(noisy_latents, timesteps, class_labels, return_dict=False)[0]
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
