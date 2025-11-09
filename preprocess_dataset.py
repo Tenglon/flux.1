@@ -15,7 +15,8 @@ import PIL
 
 parser = argparse.ArgumentParser()
 # parser.add_argument("--pretrained_model_name_or_path", type=str, default="runwayml/stable-diffusion-v1-5")
-parser.add_argument("--pretrained_model_name_or_path", type=str, default="stabilityai/stable-diffusion-3-medium-diffusers")
+# parser.add_argument("--pretrained_model_name_or_path", type=str, default="stabilityai/stable-diffusion-3-medium-diffusers")
+parser.add_argument("--pretrained_model_name_or_path", type=str, default="facebook/DiT-XL-2-256")
 parser.add_argument("--resolution", type=int, default=256)
 parser.add_argument("--dataset_name", type=str, default="keremberke/pokemon-classification")
 # parser.add_argument("--dataset_name", type=str, default="Donghyun99/Stanford-Cars")
