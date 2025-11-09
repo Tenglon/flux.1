@@ -1,5 +1,4 @@
 import argparse
-import inspect
 import logging
 import math
 import os
@@ -22,7 +21,6 @@ from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 import diffusers
 from diffusers import (
-    DDPMScheduler,
     AutoencoderKL,
     DiTPipeline,
     DPMSolverMultistepScheduler,
@@ -236,6 +234,12 @@ def parse_args():
 
     parser.add_argument("--pretrained_model_name_or_path", type=str, default=None, required=True, help="Path to pretrained model or model identifier from huggingface.co/models.")
     parser.add_argument(
+        "--dit_components_model_name_or_path",
+        type=str,
+        default="facebook/DiT-XL-2-512",
+        help="Model identifier that provides the DiT-XL-2 VAE and scheduler components.",
+    )
+    parser.add_argument(
         "--transformer_model_name_or_path",
         type=str,
         default="facebook/DiT-B-2-256x256",
@@ -386,7 +390,10 @@ def main():
         raise ValueError(f"Unknown embedding type: {args.emb_type}")
 
     vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
+        args.dit_components_model_name_or_path,
+        subfolder="vae",
+        revision=args.revision,
+        variant=args.variant,
     )
 
     tokenizer = CLIPTokenizer.from_pretrained(
@@ -444,25 +451,29 @@ def main():
     # lora_layers = filter(lambda p: p.requires_grad, transformer.parameters())
 
     # Initialize the scheduler
-    accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
-    if accepts_prediction_type:
-        # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
-        # noise_scheduler = DDIMScheduler(
-        #     num_train_timesteps=args.sample_steps,
-        #     beta_schedule=args.ddpm_beta_schedule,
-        #     prediction_type=args.prediction_type,
-        # )
+    try:
+        noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            args.dit_components_model_name_or_path,
+            subfolder="scheduler",
+            revision=args.revision,
+            variant=args.variant,
+        )
+        logger.info(
+            "Loaded FlowMatch Euler scheduler from %s.",
+            args.dit_components_model_name_or_path,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Falling back to a freshly initialized FlowMatchEulerDiscreteScheduler because loading from %s failed: %s",
+            args.dit_components_model_name_or_path,
+            error,
+        )
         noise_scheduler = FlowMatchEulerDiscreteScheduler(
             num_train_timesteps=args.sample_steps,
             shift=1.0,
         )
-    else:
-        noise_scheduler = FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=args.sample_steps,
-            shift=1.0,
-        )
-        # noise_scheduler = DDIMScheduler(num_train_timesteps=args.sample_steps, beta_schedule=args.ddpm_beta_schedule)
-        # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
+    # noise_scheduler = DDIMScheduler(num_train_timesteps=args.sample_steps, beta_schedule=args.ddpm_beta_schedule)
+    # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
@@ -727,6 +738,8 @@ def main():
                     variant=args.variant,
                     torch_dtype=weight_dtype,
                 )
+                pipeline.vae = vae
+                pipeline.vae.to(accelerator.device, dtype=weight_dtype)
                 # Replace scheduler with the one used during training to ensure consistency
                 # This ensures validation uses the same scheduler configuration as training
                 pipeline.scheduler = noise_scheduler
@@ -824,6 +837,8 @@ def main():
             )
 
             pipeline.transformer = unwrapped_transformer
+            pipeline.vae = vae
+            pipeline.vae.to(accelerator.device, dtype=weight_dtype)
             # Replace scheduler with the one used during training to ensure consistency
             pipeline.scheduler = noise_scheduler
 
