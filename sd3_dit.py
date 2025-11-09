@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 
+
 import torch
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -19,6 +20,7 @@ from diffusers import StableDiffusion3Pipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from torchvision import transforms
+from torchvision.transforms.functional import to_pil_image
 from torch.nn import functional as F
 from PIL import Image
 
@@ -189,6 +191,150 @@ def _prepare_dataset(raw_dataset, args):
     return with_transform
 
 
+def _is_wandb_enabled(accelerator):
+    trackers = getattr(accelerator, "trackers", [])
+    for tracker in trackers:
+        name = getattr(tracker, "name", "").lower()
+        if "wandb" in name:
+            return True
+        if tracker.__class__.__name__.lower().startswith("wandb"):
+            return True
+    return False
+
+
+def _tensor_batch_to_wandb_images(tensor_batch, captions):
+    import wandb  # Imported lazily to avoid dependency when not logging.
+
+    if tensor_batch is None:
+        return []
+
+    images = tensor_batch.detach().cpu()
+    images = (images / 2 + 0.5).clamp(0, 1)
+
+    wandb_images = []
+    for image, caption in zip(images, captions):
+        wandb_images.append(wandb.Image(to_pil_image(image), caption=caption))
+
+    return wandb_images
+
+
+def _pil_images_to_tensor_batch(pil_images):
+    tensor_images = []
+    normalize = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
+    )
+    for image in pil_images:
+        tensor_images.append(normalize(image.convert("RGB")))
+    if not tensor_images:
+        return None
+    return torch.stack(tensor_images)
+
+
+def _run_wandb_validation(
+    accelerator,
+    args,
+    pipeline,
+    transformer,
+    vae,
+    latents_scale,
+    train_dataset,
+    ema_model,
+    weight_dtype,
+    global_step,
+):
+    if not accelerator.is_main_process or not _is_wandb_enabled(accelerator):
+        return
+
+    try:
+        import wandb  # noqa: F401
+    except ImportError:
+        logger.warning("wandb is not installed; skipping validation logging.")
+        return
+
+    if args.validation_prompt is None:
+        return
+
+    num_images = min(args.num_validation_images, len(train_dataset))
+    if num_images == 0:
+        return
+
+    samples = []
+    for idx in range(num_images):
+        samples.append(train_dataset[idx])
+
+    pixel_values = torch.stack([sample["pixel_values"] for sample in samples])
+    captions = [sample["captions"] for sample in samples]
+
+    pixel_values = pixel_values.to(device=accelerator.device, dtype=weight_dtype)
+
+    unwrapped_transformer = accelerator.unwrap_model(transformer)
+    if ema_model is not None:
+        ema_model.store(unwrapped_transformer.parameters())
+        ema_model.copy_to(unwrapped_transformer.parameters())
+
+    pipeline.transformer = unwrapped_transformer
+    pipeline.to(accelerator.device, dtype=weight_dtype)
+    vae.to(accelerator.device, dtype=weight_dtype)
+
+    was_training = unwrapped_transformer.training
+    unwrapped_transformer.eval()
+
+    try:
+        prompts = [args.validation_prompt] * num_images
+
+        with torch.no_grad():
+            original_latents = vae.encode(pixel_values).latent_dist.sample() * latents_scale
+
+        original_images = _tensor_batch_to_wandb_images(pixel_values, captions)
+
+        generator = None
+        if args.seed is not None:
+            generator = torch.Generator(device=accelerator.device).manual_seed(args.seed + global_step)
+
+        with torch.no_grad():
+            pipeline_output = pipeline(
+                prompt=prompts,
+                num_inference_steps=args.sample_steps,
+                guidance_scale=args.guidance_scale,
+                generator=generator,
+                output_type="pil",
+            )
+
+        generated_images = getattr(pipeline_output, "images", None)
+        if generated_images is None:
+            generated_images = getattr(pipeline_output, "image", None)
+        if generated_images is None and isinstance(pipeline_output, (list, tuple)):
+            generated_images = pipeline_output[0]
+        if generated_images is None:
+            return
+
+        generated_pixel_values = _pil_images_to_tensor_batch(generated_images)
+        if generated_pixel_values is None:
+            return
+
+        generated_pixel_values = generated_pixel_values.to(device=accelerator.device, dtype=weight_dtype)
+
+        with torch.no_grad():
+            generated_latents = vae.encode(generated_pixel_values).latent_dist.sample() * latents_scale
+
+        generated_wandb_images = [wandb.Image(image, caption=caption) for image, caption in zip(generated_images, prompts)]
+
+        logs = {
+            "validation/original_images": original_images,
+            "validation/generated_images": generated_wandb_images,
+            "validation/original_latents": wandb.Histogram(original_latents.detach().cpu().flatten().numpy()),
+            "validation/generated_latents": wandb.Histogram(generated_latents.detach().cpu().flatten().numpy()),
+        }
+
+        accelerator.log(logs, step=global_step)
+    finally:
+        if ema_model is not None:
+            ema_model.restore(unwrapped_transformer.parameters())
+
+        if was_training:
+            unwrapped_transformer.train()
+
+
 def main():
     args = parse_args()
 
@@ -264,6 +410,7 @@ def main():
         num_training_steps=args.max_train_steps,
     )
 
+    pipeline.to(accelerator.device)
     transformer, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         transformer, optimizer, train_dataloader, lr_scheduler
     )
@@ -278,6 +425,8 @@ def main():
 
     global_step = 0
     transformer.train()
+
+    validation_interval = max(args.validation_epochs, 0)
 
     for batch in train_dataloader:
         with accelerator.accumulate(transformer):
@@ -320,6 +469,20 @@ def main():
 
         global_step += 1
         accelerator.log({"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}, step=global_step)
+
+        if validation_interval and global_step % validation_interval == 0:
+            _run_wandb_validation(
+                accelerator,
+                args,
+                pipeline,
+                transformer,
+                vae,
+                latents_scale,
+                train_dataset,
+                ema_model,
+                weight_dtype,
+                global_step,
+            )
 
         if global_step >= args.max_train_steps:
             break
