@@ -744,6 +744,8 @@ def main():
                     vae_dtype = pipeline.vae.dtype
                     generated_latents = generated_latents.to(vae_dtype)
 
+                    # This decode is based on the modified DiTPipeline implementation
+                    # that outputs the latents along with the images
                     generated_images = pipeline.vae.decode(
                         generated_latents / pipeline.vae.config.scaling_factor, 
                         return_dict=False, 
