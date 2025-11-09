@@ -30,8 +30,9 @@ for dataset in "${datasets[@]}"; do
 #SBATCH --time=24:00:00
 
 source activate flux
+python preprocess_dataset.py --dataset_name ${dataset}
 # srun accelerate launch --multi-gpu --num_processes 4 preprocess_dataset.py --dataset_name ${dataset}
-singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ accelerate launch --multi-gpu --num_processes 4 preprocess_dataset.py --dataset_name ${dataset}
+# singularity exec  --bind /scratch/project_465002213 /scratch/project_465002213/images/pytorch270/ accelerate launch --multi-gpu --num_processes 4 preprocess_dataset.py --dataset_name ${dataset}
 EOF
 
     # 提交作业
@@ -45,3 +46,8 @@ rm job_*.sh
 # srun python3 preprocess_dataset.py --dataset_name "keremberke/pokemon-classification"
 # srun python3 preprocess_dataset.py --dataset_name "Donghyun99/CUB-200-2011"
 # srun python3 preprocess_dataset.py --dataset_name "Donghyun99/Stanford-Cars"
+
+#CUDA_VISIBLE_DEVICES=0 python preprocess_dataset.py --dataset_name "Donghyun99/CUB-200-2011"
+#CUDA_VISIBLE_DEVICES=1 python preprocess_dataset.py --dataset_name "Donghyun99/Stanford-Cars"
+#CUDA_VISIBLE_DEVICES=2 python preprocess_dataset.py --dataset_name "keremberke/pokemon-classification"
+    

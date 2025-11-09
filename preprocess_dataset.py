@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import CLIPTokenizer
 from diffusers import AutoencoderKL
-from datasets import DatasetDict, Dataset
+from datasets import DatasetDict, Dataset, Features, Array3D, Image, ClassLabel
 from accelerate import Accelerator
 from tqdm.auto import tqdm
 import argparse
@@ -27,7 +27,7 @@ parser.add_argument("--train_data_dir", type=str, default=None)
 parser.add_argument("--center_crop", type=bool, default=True)
 parser.add_argument("--random_flip", type=bool, default=True)
 parser.add_argument("--train_batch_size", type=int, default=8)
-parser.add_argument("--dataloader_num_workers", type=int, default=1)
+parser.add_argument("--dataloader_num_workers", type=int, default=4)
 parser.add_argument("--output_dir", type=str, default="./local_datasets")
 args = parser.parse_args()
 
@@ -97,6 +97,7 @@ if __name__ == "__main__":
         full_dataset = concatenate_datasets([dataset['train'], dataset['validation'], dataset['test']])
     else:
         full_dataset = concatenate_datasets([dataset['train'], dataset['test']])
+
 
     # Step 3: 处理类别级数据集
     if args.dataset_name == "Donghyun99/CUB-200-2011":
@@ -207,27 +208,41 @@ if __name__ == "__main__":
                 merged_labels.update(proc_labels)
         
         # 使用生成器在线构建数据集，避免一次性加载所有数据到内存
+        # 优化：移除 .tolist()（numpy数组直接支持，避免慢速转换）
         progress_bar = tqdm(total=len(full_dataset), desc="构建数据集")
         def data_generator():
             for i in range(len(full_dataset)):
                 yield {
-                    "latents": merged_latents[i].tolist(),
-                    "images": merged_images[i],
-                    "labels": merged_labels[i]
+                    "latents": merged_latents[i],  # 直接使用numpy数组，不需要tolist()，datasets库原生支持
+                    "images": merged_images[i],     # PIL Image对象，datasets库支持
+                    "label": merged_labels[i]
                 }
                 progress_bar.update(1)
-        
-        dataset = Dataset.from_generator(data_generator)
+
         progress_bar.close()
-    else:
-        dataset = None
+        
+        # 获取latents的shape以确定Array3D的维度
+        sample_latent = merged_latents[0]
+        latent_shape = sample_latent.shape  # 应该是 (channels, height, width)
+        
+        # 创建Features对象，明确指定label列为ClassLabel类型
+        # 使用full_dataset中的ClassLabel特征来保持一致性
+        features = Features({
+            "latents": Array3D(shape=latent_shape, dtype="float32"),
+            "images": Image(),
+            "label": full_dataset.features[class_column]  # 直接使用full_dataset的ClassLabel特征
+        })
+        
+        # 使用单进程构建，避免多进程开销和同步问题
+        # 移除 keep_in_memory=True 以减少内存压力，让系统自动管理内存
+        dataset = Dataset.from_generator(
+            data_generator, 
+            features=features,  # 指定features以确保label列是ClassLabel类型
+            num_proc=args.dataloader_num_workers,  # 使用单进程避免多进程同步开销和卡顿
+            keep_in_memory=False  # 不全部加载到内存，减少内存压力和GC停顿
+        )
     
-    # 等待主进程完成
-    accelerator.wait_for_everyone()
-    
-    # 只在主进程上继续后续步骤
-    if accelerator.is_main_process:
-        # step5: 创建数据集
+    # step5: 创建数据集
         dataset_dict = DatasetDict({
             'sample_level': dataset,  # n_samples rows
             'class_level_hyp': class_level_dataset_hyp,        # n_classes rows
@@ -237,5 +252,8 @@ if __name__ == "__main__":
 
         dataset_dict.save_to_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
         # load dataset
-        load_dataset = load_from_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
-        print(load_dataset)
+        loaded_dataset = load_from_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
+
+        import pdb
+        pdb.set_trace()
+        print(loaded_dataset)
