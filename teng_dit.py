@@ -20,7 +20,6 @@ from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-
 import diffusers
 from diffusers import (
     DDPMScheduler,
@@ -28,6 +27,7 @@ from diffusers import (
     DiTPipeline,
     DPMSolverMultistepScheduler,
     DDIMScheduler,
+    FlowMatchEulerDiscreteScheduler,
     DiTTransformer2DModel,
 )
 from diffusers.optimization import get_scheduler
@@ -41,6 +41,82 @@ from hier_util import HierUtil
 
 
 logger = get_logger(__name__, log_level="INFO")
+
+
+def compute_snr_flow_matching(noise_scheduler, timesteps):
+    """
+    Computes SNR for flow matching schedulers.
+    
+    For flow matching: x_t = (1 - σ) * x_0 + σ * x_1
+    Signal strength: (1 - σ)
+    Noise strength: σ
+    SNR = ((1 - σ) / σ)^2
+    
+    Args:
+        noise_scheduler: Flow matching scheduler with sigmas attribute
+        timesteps: Tensor of timesteps (in [0, num_train_timesteps])
+        
+    Returns:
+        Tensor: SNR values for each timestep
+    """
+    # Get sigmas for the given timesteps
+    sigmas = noise_scheduler.sigmas.to(device=timesteps.device, dtype=timesteps.dtype)
+    
+    # Convert timesteps to indices using the same logic as scale_noise
+    # Use index_for_timestep if available, otherwise compute directly
+    if hasattr(noise_scheduler, 'index_for_timestep'):
+        # Use the scheduler's built-in method to find indices
+        schedule_timesteps = noise_scheduler.timesteps.to(device=timesteps.device)
+        indices = torch.tensor(
+            [noise_scheduler.index_for_timestep(t.item(), schedule_timesteps) for t in timesteps],
+            device=timesteps.device
+        )
+    elif hasattr(noise_scheduler, 'timesteps') and noise_scheduler.timesteps is not None:
+        # Find indices for each timestep by finding closest match
+        schedule_timesteps = noise_scheduler.timesteps.to(device=timesteps.device)
+        timesteps_expanded = timesteps.unsqueeze(-1)  # [batch_size, 1]
+        schedule_expanded = schedule_timesteps.unsqueeze(0)  # [1, num_sigmas]
+        # Find closest timestep index for each input timestep
+        distances = (schedule_expanded - timesteps_expanded).abs()  # [batch_size, num_sigmas]
+        indices = distances.argmin(dim=1)  # [batch_size]
+    else:
+        # Fallback: convert timesteps directly to indices
+        # timesteps are in [0, num_train_timesteps], sigmas has num_train_timesteps elements
+        num_sigmas = len(sigmas)
+        # Normalize timesteps to [0, 1] and scale to [0, num_sigmas-1]
+        indices = (timesteps / noise_scheduler.config.num_train_timesteps * (num_sigmas - 1)).long()
+        indices = torch.clamp(indices, 0, num_sigmas - 1)
+    
+    # Get sigma values for the timesteps
+    sigma = sigmas[indices].float()
+    
+    # Ensure sigma is in valid range [0, 1] to avoid division by zero
+    sigma = torch.clamp(sigma, min=1e-8, max=1.0 - 1e-8)
+    
+    # Compute SNR: SNR = ((1 - σ) / σ)^2
+    one_minus_sigma = 1.0 - sigma
+    snr = (one_minus_sigma / sigma) ** 2
+    
+    return snr
+
+
+def compute_snr_compatible(noise_scheduler, timesteps):
+    """
+    Computes SNR compatible with both traditional diffusion and flow matching schedulers.
+    
+    Args:
+        noise_scheduler: Either a traditional scheduler (with alphas_cumprod) or flow matching scheduler (with sigmas)
+        timesteps: Tensor of timesteps
+        
+    Returns:
+        Tensor: SNR values for each timestep
+    """
+    # Check if it's a flow matching scheduler
+    if isinstance(noise_scheduler, FlowMatchEulerDiscreteScheduler):
+        return compute_snr_flow_matching(noise_scheduler, timesteps)
+    else:
+        # Use the standard compute_snr for traditional schedulers
+        return compute_snr(noise_scheduler, timesteps)
 
 
 def registor_new_accelerate(args, accelerator, ema_model):
@@ -91,7 +167,10 @@ def _prepare_wandb_images(image_batch, captions):
 
     wandb_images = []
     for img_tensor, caption in zip(images, captions):
-        img_np = img_tensor.permute(1, 2, 0).numpy()
+        if img_tensor.shape[0] == 3:
+            img_np = img_tensor.permute(1, 2, 0).numpy()
+        else:
+            img_np = img_tensor.numpy()
         wandb_images.append(wandb.Image(img_np, caption=caption))
 
     return wandb_images
@@ -122,8 +201,8 @@ def build_dit_b_2_transformer(sample_size):
     dit_b_2_config = dict(
         sample_size=sample_size,
         patch_size=2,
-        in_channels=4,
-        out_channels=4,
+        in_channels=16,
+        out_channels=16,
         num_attention_heads=12,
         attention_head_dim=64,
         num_layers=12,
@@ -132,11 +211,11 @@ def build_dit_b_2_transformer(sample_size):
         num_embeds_ada_norm=1000,
     )
 
-    dit_s_2_config = dict(
+    dit_s_4_config = dict(
         sample_size=sample_size,
-        patch_size=2,
-        in_channels=4,  
-        out_channels=4,
+        patch_size=4,
+        in_channels=16,  
+        out_channels=16,
         num_attention_heads=6,
         attention_head_dim=64,
         num_layers=12,
@@ -145,7 +224,7 @@ def build_dit_b_2_transformer(sample_size):
         num_embeds_ada_norm=1000,
     )
 
-    return DiTTransformer2DModel(**dit_s_2_config)
+    return DiTTransformer2DModel(**dit_s_4_config)
 
 
 
@@ -285,7 +364,7 @@ def main():
     create_repository(args, accelerator)
 
     dataset = load_from_disk(args.dataset_name)
-    image_column = 'image'
+    image_column = 'images'
     class_column = 'label'
     latents_column = 'latents'
     
@@ -368,13 +447,21 @@ def main():
     accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
     if accepts_prediction_type:
         # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
-        noise_scheduler = DDIMScheduler(
+        # noise_scheduler = DDIMScheduler(
+        #     num_train_timesteps=args.sample_steps,
+        #     beta_schedule=args.ddpm_beta_schedule,
+        #     prediction_type=args.prediction_type,
+        # )
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(
             num_train_timesteps=args.sample_steps,
-            beta_schedule=args.ddpm_beta_schedule,
-            prediction_type=args.prediction_type,
+            shift=1.0,
         )
     else:
-        noise_scheduler = DDIMScheduler(num_train_timesteps=args.sample_steps, beta_schedule=args.ddpm_beta_schedule)
+        noise_scheduler = FlowMatchEulerDiscreteScheduler(
+            num_train_timesteps=args.sample_steps,
+            shift=1.0,
+        )
+        # noise_scheduler = DDIMScheduler(num_train_timesteps=args.sample_steps, beta_schedule=args.ddpm_beta_schedule)
         # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler", algorithm_type="dpmsolver++", use_karras_sigmas=True)
 
     # Initialize the optimizer
@@ -536,20 +623,27 @@ def main():
                 noise = torch.randn(latents.shape, dtype=weight_dtype, device=latents.device)
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device).long()
+                timesteps = torch.randint(1, noise_scheduler.config.num_train_timesteps + 1, (bsz,), device=latents.device).float()
 
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                noisy_latents = noise_scheduler.scale_noise(latents, timesteps, noise)
 
-                # Get the target for loss depending on the prediction type
-                if args.prediction_type is not None:
-                    noise_scheduler.register_to_config(prediction_type=args.prediction_type)
-
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                # Get the target for loss depending on the scheduler type
+                # Flow Matching schedulers predict velocity field directly, not epsilon or v_prediction
+                if isinstance(noise_scheduler, FlowMatchEulerDiscreteScheduler):
+                    # For Flow Matching: target is the velocity field v = x_1 - x_0
+                    # where x_0 is noise and x_1 is the real data (latents)
+                    target = latents - noise
                 else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                    # For traditional diffusion schedulers (DDPM, DDIM, etc.)
+                    if args.prediction_type is not None:
+                        noise_scheduler.register_to_config(prediction_type=args.prediction_type)
+
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(latents, noise, timesteps)
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 model_pred = transformer(noisy_latents, timesteps, class_labels, return_dict=False)[0]
 
@@ -559,14 +653,19 @@ def main():
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(noise_scheduler, timesteps)
+                    snr = compute_snr_compatible(noise_scheduler, timesteps)
                     mse_loss_weights = torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(
                         dim=1
                     )[0]
-                    if noise_scheduler.config.prediction_type == "epsilon":
-                        mse_loss_weights = mse_loss_weights / snr
-                    elif noise_scheduler.config.prediction_type == "v_prediction":
-                        mse_loss_weights = mse_loss_weights / (snr + 1)
+                    # Flow Matching doesn't use prediction_type, so we use a simple weighting
+                    if isinstance(noise_scheduler, FlowMatchEulerDiscreteScheduler):
+                        # For Flow Matching, use uniform weighting (or adjust as needed)
+                        pass  # Keep mse_loss_weights as computed from SNR
+                    elif hasattr(noise_scheduler.config, 'prediction_type'):
+                        if noise_scheduler.config.prediction_type == "epsilon":
+                            mse_loss_weights = mse_loss_weights / snr
+                        elif noise_scheduler.config.prediction_type == "v_prediction":
+                            mse_loss_weights = mse_loss_weights / (snr + 1)
 
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
@@ -618,7 +717,7 @@ def main():
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
+            if epoch % args.validation_epochs != 0:
                 # create pipeline
 
                 pipeline = DiTPipeline.from_pretrained(
@@ -628,8 +727,11 @@ def main():
                     variant=args.variant,
                     torch_dtype=weight_dtype,
                 )
+                # Replace scheduler with the one used during training to ensure consistency
+                # This ensures validation uses the same scheduler configuration as training
+                pipeline.scheduler = noise_scheduler
                 with torch.no_grad():
-                    generated_latents_object, generated_labels = log_validation(
+                    generated_latents, generated_labels = log_validation(
                         pipeline,
                         args,
                         accelerator,
@@ -638,15 +740,16 @@ def main():
                         class_set=class_set_emb,
                         unique_train_labels=unique_train_labels,
                     )
-                    generated_latents = generated_latents_object[0]
 
                     vae_dtype = pipeline.vae.dtype
                     generated_latents = generated_latents.to(vae_dtype)
+
                     generated_images = pipeline.vae.decode(
-                        generated_latents / pipeline.vae.config.scaling_factor,
-                        return_dict=False,
-                        generator=None,
+                        generated_latents / pipeline.vae.config.scaling_factor, 
+                        return_dict=False, 
+                        generator=None
                     )[0]
+
 
                     reference_latents = latents[: args.num_validation_images].to(vae_dtype)
                     images_decode = pipeline.vae.decode(
@@ -654,9 +757,6 @@ def main():
                         return_dict=False,
                         generator=None,
                     )[0]
-
-                    generated_latents_cpu = generated_latents.detach().float().cpu()
-                    reference_latents_cpu = reference_latents.detach().float().cpu()
 
                     for tracker in accelerator.trackers:
                         if tracker.name == "wandb":
@@ -685,11 +785,11 @@ def main():
                                     "validation/generated_image": _prepare_wandb_images(
                                         generated_images[:num_generated], generated_captions
                                     ),
-                                    "validation/latents_histogram": wandb.Histogram(
-                                        reference_latents_cpu.numpy().flatten()
-                                    ),
                                     "validation/generated_latents_histogram": wandb.Histogram(
-                                        generated_latents_cpu.numpy().flatten()
+                                        generated_latents.detach().float().cpu().numpy().flatten()
+                                    ),
+                                    "validation/original_latents_histogram": wandb.Histogram(
+                                        latents.detach().float().cpu().numpy().flatten()
                                     ),
                                 },
                                 step=global_step,
@@ -720,6 +820,8 @@ def main():
             )
 
             pipeline.transformer = unwrapped_transformer
+            # Replace scheduler with the one used during training to ensure consistency
+            pipeline.scheduler = noise_scheduler
 
             # run inference
             with torch.no_grad():

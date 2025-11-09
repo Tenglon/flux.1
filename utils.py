@@ -8,7 +8,8 @@ from packaging import version
 from accelerate.logging import get_logger
 import torch
 import wandb
-
+from diffusers import DiTPipeline
+from diffusers import FlowMatchEulerDiscreteScheduler
 logger = get_logger(__name__, log_level="INFO")
 
 
@@ -20,6 +21,16 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=False)
+    
+    # Add scale_model_input method to FlowMatchEulerDiscreteScheduler if it doesn't exist
+    # Flow matching schedulers don't need to scale the input, so we just return it as-is
+    if isinstance(pipeline, DiTPipeline) and isinstance(pipeline.scheduler, FlowMatchEulerDiscreteScheduler):
+        if not hasattr(pipeline.scheduler, 'scale_model_input'):
+            def scale_model_input(sample: torch.Tensor, timestep) -> torch.Tensor:
+                """Compatibility method for FlowMatchEulerDiscreteScheduler - returns input unchanged."""
+                return sample
+            pipeline.scheduler.scale_model_input = scale_model_input
+    
     generator = torch.Generator(device=accelerator.device)
     if args.seed is not None:
         generator = generator.manual_seed(args.seed)
@@ -49,14 +60,22 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     # prompt_labels = [args.validation_prompt.format(prompt_label) for prompt_label in prompt_labels]
 
     with autocast_ctx:
-        generated_latents = pipeline(prompt = None, 
-                             guidance_scale=args.guidance_scale, 
-                             num_inference_steps=args.sample_steps, 
-                             generator=generator, 
-                             prompt_embeds=prompt_embeds, 
-                             negative_prompt_embeds=negative_prompt_embeds,
-                             latents=latents,
-                             output_type="latent")
+        if isinstance(pipeline, DiTPipeline):
+            # DiTPipeline directly output images rather than latents
+            generated_images, generated_latents = pipeline(class_labels = prompt_idxs, 
+                                guidance_scale=args.guidance_scale, 
+                                generator=generator, 
+                                num_inference_steps=args.sample_steps,
+                                output_type="numpy")
+        else:
+            generated_latents = pipeline(prompt = None, 
+                                guidance_scale=args.guidance_scale, 
+                                num_inference_steps=args.sample_steps, 
+                                generator=generator, 
+                                prompt_embeds=prompt_embeds, 
+                                negative_prompt_embeds=negative_prompt_embeds,
+                                latents=latents,
+                                output_type="latent")
     # END: add class embeddings
 
     return generated_latents, prompt_idxs
