@@ -36,6 +36,50 @@ from hier_util import HierUtil
 logger = get_logger(__name__, log_level="INFO")
 
 
+def log_wandb_validation_images(tracker, original_images, generated_images, original_labels, generated_labels, 
+                                 class_set_plain, class_set_emb, latents, generated_latents, step=None):
+    """记录验证图像和潜在向量到 wandb，类似于 facebook_dit.py 中的 log_wandb_latents 函数"""
+    if tracker.name != "wandb":
+        return
+    
+    # 处理原始图像
+    original_images = original_images.detach().float().cpu()
+    original_images = (original_images / 2 + 0.5).clamp(0, 1)
+    wandb_original_images = []
+    for i, image in enumerate(original_images):
+        if image.shape[0] == 3:
+            img = image.permute(1, 2, 0).numpy()
+        else:
+            img = image.numpy()
+        caption = f"{class_set_plain[original_labels[i]]}"
+        wandb_original_images.append(wandb.Image(img, caption=caption))
+    
+    # 处理生成图像
+    generated_images = generated_images.detach().float().cpu()
+    generated_images = (generated_images / 2 + 0.5).clamp(0, 1)
+    wandb_generated_images = []
+    for i, image in enumerate(generated_images):
+        if image.shape[0] == 3:
+            img = image.permute(1, 2, 0).numpy()
+        else:
+            img = image.numpy()
+        caption = f"{class_set_emb[generated_labels[i]]}"
+        wandb_generated_images.append(wandb.Image(img, caption=caption))
+    
+    # 记录到 wandb
+    log_dict = {
+        'original_image': wandb_original_images,
+        'generated_image': wandb_generated_images,
+        'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
+        'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
+    }
+    
+    if step is not None:
+        tracker.log(log_dict, step=step)
+    else:
+        tracker.log(log_dict)
+
+
 def registor_new_accelerate(args, accelerator, ema_model):
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
@@ -214,7 +258,7 @@ def main():
     create_repository(args, accelerator)
 
     dataset = load_from_disk(args.dataset_name)
-    image_column = 'image'
+    image_column = 'images'
     class_column = 'label'
     latents_column = 'latents'
     
@@ -561,7 +605,7 @@ def main():
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
+            if  epoch % args.validation_epochs == 0:
                 # create pipeline
 
                 pipeline = DiffusionPipeline.from_pretrained(
@@ -577,27 +621,27 @@ def main():
                     generated_latents = generated_latents_object[0]
                     # generated_latents = generated_latents * pipeline.vae.config.scaling_factor
 
-                    generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, 
-                                                       return_dict=False, generator=None)[0]
+                    generated_images = pipeline.vae.decode(generated_latents.to(torch.bfloat16) / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
                     
                     images_decode = pipeline.vae.decode(latents[:args.num_validation_images] / pipeline.vae.config.scaling_factor, return_dict=False, generator=None)[0]
+                    
+
+                    logger.info("latents max: %s, min: %s, std: %s", latents.float().max().item(), latents.float().min().item(), latents.float().std().item())
+                    logger.info("generated_latents max: %s, min: %s, std: %s", generated_latents.float().max().item(), generated_latents.float().min().item(), generated_latents.float().std().item())
 
                     for tracker in accelerator.trackers:
                         original_labels = batch["class_labels"]
-
-                        if tracker.name == "wandb":
-                            tracker.log(
-                                {
-                                    'original_image': [
-                                        wandb.Image(image, caption=f"{class_set_plain[original_labels[i]]}") for i, image in enumerate(images_decode)
-                                    ],
-                                    'generated_image': [
-                                        wandb.Image(image, caption=f"{class_set_emb[generated_labels[i]]}") for i, image in enumerate(generated_images)
-                                    ],
-                                    'latents_histogram': wandb.Histogram(latents.detach().float().cpu().numpy().flatten()),
-                                    'generated_latents_histogram': wandb.Histogram(generated_latents.detach().float().cpu().numpy().flatten())
-                                }
-                            )
+                        log_wandb_validation_images(
+                            tracker=tracker,
+                            original_images=images_decode,
+                            generated_images=generated_images,
+                            original_labels=original_labels,
+                            generated_labels=generated_labels,
+                            class_set_plain=class_set_plain,
+                            class_set_emb=class_set_emb,
+                            latents=latents,
+                            generated_latents=generated_latents
+                        )
 
                 del pipeline
                 torch.cuda.empty_cache()
