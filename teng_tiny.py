@@ -265,6 +265,9 @@ def main():
     class_set_emb = dataset['class_level_hyp']['objects']
     if args.dataset_name == "./local_datasets/Donghyun99/CUB-200-2011_latents":
         class_set_emb = [cls.replace(cls[:4], "") if cls[:3].isdigit() and cls[3] == "." else cls for cls in class_set_emb]
+    if args.dataset_name == "./local_datasets/Donghyun99/Stanford-Cars_latents":
+        # Ram_CV_Cargo_Van_Minivan_2012 to Ram_C/V_Cargo_Van_Minivan_2012
+        class_set_emb = [cls.replace("Ram_CV_Cargo_Van_Minivan_2012", "Ram_C/V_Cargo_Van_Minivan_2012") for cls in class_set_emb]
 
     # class_embeddings = torch.randn(len(class_set_emb), 300)
     # for i, name in enumerate(class_set_emb):
@@ -411,20 +414,21 @@ def main():
         selected_class_labels = [class_set_plain.index(cls) for cls in selected_class_set]
     
     with accelerator.main_process_first():
-        if args.max_train_samples is not None:
-            dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed)
-            # idx = torch.tensor([(label in [1, 2, 3]) for label in dataset['sample_level']['label']])
-            idx = torch.tensor([(label in selected_class_labels) for label in dataset['sample_level']['label']])
-            idx = torch.where(idx)[0]
-            # Resample idx to match args.max_train_samples size
-            if len(idx) < args.max_train_samples:
-                # Calculate how many times we need to repeat the indices
-                repeat_factor = args.max_train_samples // len(idx) + 1
-                # Repeat the indices and then select the required number
-                idx = idx.repeat(repeat_factor)[:args.max_train_samples]
-            dataset['sample_level'] = dataset['sample_level'].select(idx)
-            # if args.max_train_samples is not None:
-                # dataset['sample_level'] = dataset['sample_level'].select(range(args.max_train_samples))
+        if False:
+            if args.max_train_samples is not None:
+                dataset['sample_level'] = dataset['sample_level'].shuffle(seed=args.seed)
+                # idx = torch.tensor([(label in [1, 2, 3]) for label in dataset['sample_level']['label']])
+                idx = torch.tensor([(label in selected_class_labels) for label in dataset['sample_level']['label']])
+                idx = torch.where(idx)[0]
+                # Resample idx to match args.max_train_samples size
+                if len(idx) < args.max_train_samples:
+                    # Calculate how many times we need to repeat the indices
+                    repeat_factor = args.max_train_samples // len(idx) + 1
+                    # Repeat the indices and then select the required number
+                    idx = idx.repeat(repeat_factor)[:args.max_train_samples]
+                dataset['sample_level'] = dataset['sample_level'].select(idx)
+                # if args.max_train_samples is not None:
+                    # dataset['sample_level'] = dataset['sample_level'].select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = dataset['sample_level'].with_transform(preprocess_train)
         # print the label of the first 10 samples

@@ -14,9 +14,9 @@ import PIL
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 parser = argparse.ArgumentParser()
-# parser.add_argument("--pretrained_model_name_or_path", type=str, default="runwayml/stable-diffusion-v1-5")
+parser.add_argument("--pretrained_model_name_or_path", type=str, default="runwayml/stable-diffusion-v1-5")
 # parser.add_argument("--pretrained_model_name_or_path", type=str, default="stabilityai/stable-diffusion-3-medium-diffusers")
-parser.add_argument("--pretrained_model_name_or_path", type=str, default="facebook/DiT-XL-2-256")
+# parser.add_argument("--pretrained_model_name_or_path", type=str, default="facebook/DiT-XL-2-256")
 parser.add_argument("--resolution", type=int, default=256)
 parser.add_argument("--dataset_name", type=str, default="keremberke/pokemon-classification")
 # parser.add_argument("--dataset_name", type=str, default="Donghyun99/Stanford-Cars")
@@ -160,7 +160,7 @@ if __name__ == "__main__":
             
             # 编码为 latent
             latents = vae.encode(pixel_values_batch).latent_dist.sample()
-            latents = latents * vae.config.scaling_factor
+            latents = latents * vae.config.scaling_factor 
             
             # 收集每个样本的 latent、pixel_values 和 label（移到 CPU 并转换为 numpy）
             for i, idx in enumerate(indices):
@@ -255,6 +255,4 @@ if __name__ == "__main__":
         # load dataset
         loaded_dataset = load_from_disk(os.path.join(args.output_dir, args.dataset_name + "_latents"))
 
-        import pdb
-        pdb.set_trace()
         print(loaded_dataset)

@@ -22,15 +22,6 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=False)
     
-    # Add scale_model_input method to FlowMatchEulerDiscreteScheduler if it doesn't exist
-    # Flow matching schedulers don't need to scale the input, so we just return it as-is
-    if isinstance(pipeline, DiTPipeline) and isinstance(pipeline.scheduler, FlowMatchEulerDiscreteScheduler):
-        if not hasattr(pipeline.scheduler, 'scale_model_input'):
-            def scale_model_input(sample: torch.Tensor, timestep) -> torch.Tensor:
-                """Compatibility method for FlowMatchEulerDiscreteScheduler - returns input unchanged."""
-                return sample
-            pipeline.scheduler.scale_model_input = scale_model_input
-    
     generator = torch.Generator(device=accelerator.device)
     if args.seed is not None:
         generator = generator.manual_seed(args.seed)
@@ -62,6 +53,7 @@ def log_validation(pipeline, args, accelerator, epoch, is_final_validation=False
     with autocast_ctx:
         if isinstance(pipeline, DiTPipeline):
             # DiTPipeline directly output images rather than latents
+            print(f"generating images from class labels: {prompt_idxs}, {[class_set[prompt_id] for prompt_id in prompt_idxs]}")
             generated_images, generated_latents = pipeline(class_labels = prompt_idxs, 
                                 guidance_scale=args.guidance_scale, 
                                 generator=generator, 

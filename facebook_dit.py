@@ -4,6 +4,7 @@ import math
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Optional
 
 import datasets
 import diffusers
@@ -17,6 +18,8 @@ from diffusers import (
     AutoencoderKL,
     DiTPipeline,
     DDIMScheduler,
+    DDPMScheduler,
+    DPMSolverMultistepScheduler,
     DiTTransformer2DModel,
 )
 from diffusers.optimization import get_scheduler
@@ -136,23 +139,19 @@ def compute_snr_flow_matching(noise_scheduler, timesteps):
     return snr
 
 
-def compute_snr_compatible(noise_scheduler, timesteps):
-    # Use standard compute_snr for DDIMScheduler
-    return compute_snr(noise_scheduler, timesteps)
 
-
-def build_dit_b_2_transformer(sample_size: int) -> DiTTransformer2DModel:
+def build_dit_b_2_transformer(sample_size: int, num_classes: int) -> DiTTransformer2DModel:
     config = dict(
         sample_size=sample_size,
-        patch_size=4,
+        patch_size=2,
         in_channels=4,
         out_channels=4,
-        num_attention_heads=6,
+        num_attention_heads=12,
         attention_head_dim=64,
         num_layers=12,
         attention_bias=True,
         activation_fn="gelu-approximate",
-        num_embeds_ada_norm=1000,
+        num_embeds_ada_norm=num_classes,  # 使用实际的类别数量，而不是硬编码的 1000
     )
     return DiTTransformer2DModel(**config)
 
@@ -305,8 +304,139 @@ def log_wandb_latents(tracker, tag_prefix, images, latents, captions, step):
     )
 
 
+class CustomDiTPipeline(DiTPipeline):
+    """自定义 DiTPipeline，使用 transformer.config.num_embeds_ada_norm 而不是硬编码的 1000"""
+    
+    @torch.no_grad()
+    def __call__(
+        self,
+        class_labels,
+        guidance_scale: float = 4.0,
+        generator=None,
+        num_inference_steps: int = 50,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True,
+    ):
+        # 从 transformer 配置中获取 num_embeds_ada_norm（即类别数量）
+        num_classes = self.transformer.config.num_embeds_ada_norm
+        
+        batch_size = len(class_labels)
+        latent_size = self.transformer.config.sample_size
+        latent_channels = self.transformer.config.in_channels
+
+        # Initialize latents with standard normal distribution N(0, 1)
+        # This matches the training setup where noise is sampled from N(0, 1)
+        latents = diffusers.utils.torch_utils.randn_tensor(
+            shape=(batch_size, latent_channels, latent_size, latent_size),
+            generator=generator,
+            device=self._execution_device,
+            dtype=self.transformer.dtype,
+        )
+        # Log initial latents statistics for debugging
+        logger.info("Initial latents - max: %s, min: %s, std: %s, mean: %s", 
+                   latents.max().item(), latents.min().item(), latents.std().item(), latents.mean().item())
+        latent_model_input = torch.cat([latents] * 2) if guidance_scale > 1 else latents
+
+        class_labels = torch.tensor(class_labels, device=self._execution_device).reshape(-1)
+        # 使用 num_classes 而不是硬编码的 1000
+        class_null = torch.tensor([num_classes] * batch_size, device=self._execution_device)
+        class_labels_input = torch.cat([class_labels, class_null], 0) if guidance_scale > 1 else class_labels
+
+        # set step values
+        self.scheduler.set_timesteps(num_inference_steps)
+        for t in self.progress_bar(self.scheduler.timesteps):
+            if guidance_scale > 1:
+                half = latent_model_input[: len(latent_model_input) // 2]
+                latent_model_input = torch.cat([half, half], dim=0)
+            latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+
+            timesteps = t
+            if not torch.is_tensor(timesteps):
+                is_mps = latent_model_input.device.type == "mps"
+                if isinstance(timesteps, float):
+                    dtype = torch.float32 if is_mps else torch.float64
+                else:
+                    dtype = torch.int32 if is_mps else torch.int64
+                timesteps = torch.tensor([timesteps], dtype=dtype, device=latent_model_input.device)
+            elif len(timesteps.shape) == 0:
+                timesteps = timesteps[None].to(latent_model_input.device)
+            timesteps = timesteps.expand(latent_model_input.shape[0])
+            
+            # predict noise model_output
+            noise_pred = self.transformer(
+                latent_model_input, timestep=timesteps, class_labels=class_labels_input
+            ).sample
+
+            # perform guidance
+            if guidance_scale > 1:
+                eps, rest = noise_pred[:, :latent_channels], noise_pred[:, latent_channels:]
+                cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+                
+                half_eps = uncond_eps + guidance_scale * (cond_eps - uncond_eps)
+                eps = torch.cat([half_eps, half_eps], dim=0)
+                
+                noise_pred = torch.cat([eps, rest], dim=1)
+
+            # learned sigma
+            if self.transformer.config.out_channels // 2 == latent_channels:
+                model_output, _ = torch.split(noise_pred, latent_channels, dim=1)
+            else:
+                model_output = noise_pred
+
+            # compute previous image: x_t -> x_t-1
+            prev_sample = self.scheduler.step(model_output, t, latent_model_input, eta=0.1).prev_sample
+            # Log scheduler step details for debugging
+            if t % 100 == 0:
+                # Get alpha values for current and previous timestep
+                prev_timestep = t - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+                alpha_prod_t = self.scheduler.alphas_cumprod[t] if t < len(self.scheduler.alphas_cumprod) else self.scheduler.alphas_cumprod[-1]
+                alpha_prod_t_prev = (self.scheduler.alphas_cumprod[prev_timestep] 
+                                    if prev_timestep >= 0 and prev_timestep < len(self.scheduler.alphas_cumprod) 
+                                    else self.scheduler.final_alpha_cumprod)
+                logger.info("Scheduler step - t: %s, prev_t: %s, alpha_prod_t: %s, alpha_prod_t_prev: %s", 
+                           t.item(), prev_timestep, alpha_prod_t.item(), alpha_prod_t_prev.item())
+            latent_model_input = prev_sample
+            # log the max, min, std of cond_eps and uncond_eps and noise_pred
+            if t % 100 == 0:
+                logger.info("t: %s", t)
+                # logger.info("cond_eps max: %s, min: %s, std: %s", cond_eps.max(), cond_eps.min(), cond_eps.std())
+                # logger.info("uncond_eps max: %s, min: %s, std: %s", uncond_eps.max(), uncond_eps.min(), uncond_eps.std())
+                logger.info("noise_pred max: %s, min: %s, std: %s", noise_pred.max(), noise_pred.min(), noise_pred.std())
+                logger.info("latent_model_input max: %s, min: %s, std: %s", latent_model_input.max(), latent_model_input.min(), latent_model_input.std())
+
+        if guidance_scale > 1:
+            latents, _ = latent_model_input.chunk(2, dim=0)
+        else:
+            latents = latent_model_input
+
+        # log the max, min, std of latents
+        logger.info("latents max: %s, min: %s, std: %s", latents.max(), latents.min(), latents.std())
+
+        latents = 1 / self.vae.config.scaling_factor * latents
+        samples = self.vae.decode(latents).sample
+
+        samples = (samples / 2 + 0.5).clamp(0, 1)
+
+        # we always cast to float32 as this does not cause significant overhead and is compatible with bfloat16
+        samples = samples.cpu().permute(0, 2, 3, 1).float().numpy()
+
+        if output_type == "pil":
+            samples = self.numpy_to_pil(samples)
+
+        # Offload all models
+        self.maybe_free_model_hooks()
+
+        if not return_dict:
+            return (samples,)
+
+        # Fixed, also output the latents
+        return diffusers.pipelines.pipeline_utils.ImagePipelineOutput(images=samples), latents
+
+
+
 def create_pipeline(args, transformer, vae, noise_scheduler, weight_dtype):
-    pipeline = DiTPipeline.from_pretrained(
+    # 使用自定义的 CustomDiTPipeline 而不是标准的 DiTPipeline
+    pipeline = CustomDiTPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         transformer=transformer,
         revision=args.revision,
@@ -355,16 +485,21 @@ def main():
 
     class_embeddings, class_set_plain, class_set_emb, selected_class_labels = prepare_class_embeddings(args, dataset)
 
-    vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="vae",
-        revision=args.revision,
-        variant=args.variant,
+    # pipe_ditxl = DiTPipeline.from_pretrained("facebook/DiT-XL-2-256", torch_dtype=torch.float16)
+    # vae = pipe_ditxl.vae
+    vae = AutoencoderKL.from_pretrained("facebook/DiT-XL-2-256", subfolder="vae", torch_dtype=torch.float16)
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=args.sample_steps,
+        beta_schedule=args.ddpm_beta_schedule,
+        prediction_type=args.prediction_type,
+        clip_sample=False,
+        clip_sample_range=1.0/vae.config.scaling_factor + 1,
     )
+    logger.info("DDIM scheduler config: %s", noise_scheduler.config)
 
     transformer_sample_size = args.resolution_latent
     logger.info("Initializing a DiT-S/4 sized transformer (sample_size=%s).", transformer_sample_size)
-    transformer = build_dit_b_2_transformer(sample_size=transformer_sample_size)
+    transformer = build_dit_b_2_transformer(sample_size=transformer_sample_size, num_classes=len(class_set_plain))
 
     ema_model = None
     if args.use_ema:
@@ -392,28 +527,21 @@ def main():
     if ema_model is not None:
         ema_model.to(accelerator.device, dtype=weight_dtype)
 
+    # Save transformer config before wrapping with accelerator.prepare()
+    # This is needed because DistributedDataParallel doesn't have config attribute
+    transformer_out_channels = transformer.config.out_channels
+    transformer_in_channels = transformer.config.in_channels
+
     if args.enable_xformers_memory_efficient_attention:
         enable_xformers(transformer)
 
-    try:
-        noise_scheduler = DDIMScheduler.from_pretrained(
-            args.pretrained_model_name_or_path,
-            subfolder="scheduler",
-            revision=args.revision,
-            variant=args.variant,
-        )
-        logger.info("Loaded DDIM scheduler from %s.", args.pretrained_model_name_or_path)
-    except Exception as error:  # noqa: BLE001
-        logger.warning(
-            "Falling back to a freshly initialized DDIMScheduler because loading from %s failed: %s",
-            args.pretrained_model_name_or_path,
-            error,
-        )
-        noise_scheduler = DDIMScheduler(
-            num_train_timesteps=args.sample_steps,
-            beta_schedule=args.ddpm_beta_schedule,
-            prediction_type=args.prediction_type,
-        )
+
+    logger.info(
+        "Created DDIM scheduler with num_train_timesteps=%s, beta_schedule=%s, prediction_type=%s",
+        args.sample_steps,
+        args.ddpm_beta_schedule,
+        args.prediction_type,
+    )
 
     optimizer = torch.optim.AdamW(
         transformer.parameters(),
@@ -523,8 +651,8 @@ def main():
 
                 latents = batch["latents"].to(accelerator.device, dtype=weight_dtype, non_blocking=True)
                 class_labels = batch["class_labels"].to(accelerator.device, non_blocking=True)
-                if torch.rand(1).item() < args.guidance_dropout_prob:
-                    class_labels = torch.zeros_like(class_labels)
+                # if torch.rand(1).item() < args.guidance_dropout_prob:
+                    # class_labels = torch.zeros_like(class_labels)
 
                 noise = torch.randn(latents.shape, dtype=weight_dtype, device=latents.device)
                 bsz = latents.shape[0]
@@ -540,6 +668,7 @@ def main():
                 # Add noise to the latents according to the noise magnitude at each timestep
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
+
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
                     noise_scheduler.register_to_config(prediction_type=args.prediction_type)
@@ -554,10 +683,16 @@ def main():
 
                 model_pred = transformer(noisy_latents, timesteps, class_labels, return_dict=False)[0]
 
+                # Handle learned sigma: if out_channels is 2x latent_channels, 
+                # the model outputs [noise_pred, sigma_pred], we only need the noise_pred part
+                latent_channels = latents.shape[1]
+                if transformer_out_channels // 2 == latent_channels:
+                    model_pred, _ = torch.split(model_pred, latent_channels, dim=1)
+
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 else:
-                    snr = compute_snr_compatible(noise_scheduler, timesteps)
+                    snr = compute_snr(noise_scheduler, timesteps)
                     mse_loss_weights = torch.stack(
                         [snr, args.snr_gamma * torch.ones_like(timesteps)],
                         dim=1,
@@ -569,6 +704,7 @@ def main():
                     loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
+
 
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
@@ -607,80 +743,27 @@ def main():
             if global_step >= args.max_train_steps:
                 break
 
-        if not accelerator.is_main_process or epoch % args.validation_epochs == 0:
-            continue
 
-        pipeline = create_pipeline(
-            args,
-            unwrap_model(accelerator, transformer),
-            vae,
-            noise_scheduler,
-            weight_dtype,
-        )
-        pipeline.vae.to(accelerator.device, dtype=weight_dtype)
+        if accelerator.is_main_process and epoch % args.validation_epochs == 0:
+            # check the max, min, std of noisy_latents and latents
+            logger.info("noisy_latents max: %s, min: %s, std: %s", noisy_latents.float().max().item(), noisy_latents.float().min().item(), noisy_latents.float().std().item())
+            logger.info("latents max: %s, min: %s, std: %s", latents.float().max().item(), latents.float().min().item(), latents.float().std().item())
+            # For validation, use EMA model if available (it's more stable and performs better)
+            # During training, we use the main transformer model because:
+            # 1. The main model needs to compute gradients and update parameters
+            # 2. EMA model is just a smoothed version of weights, updated via ema_model.step() after each optimizer step
+            # 3. EMA model doesn't participate in training, only maintains a moving average
+            unwrapped_transformer = unwrap_model(accelerator, transformer)
+            if ema_model is not None:
+                # Store current transformer parameters and copy EMA weights for validation
+                ema_model.store(unwrapped_transformer.parameters())
+                ema_model.copy_to(unwrapped_transformer.parameters())
 
-        with torch.no_grad():
-            generated_latents, generated_labels = log_validation(
-                pipeline,
-                args,
-                accelerator,
-                epoch,
-                class_embeddings=class_embeddings,
-                class_set=class_set_emb,
-                unique_train_labels=unique_train_labels,
-            )
-            generated_latents = generated_latents.to(pipeline.vae.dtype)
-            generated_images = decode_latents(pipeline.vae, generated_latents)
-
-            reference_latents = batch["latents"][: args.num_validation_images].to(pipeline.vae.dtype)
-            original_images = decode_latents(pipeline.vae, reference_latents)
-
-            original_labels = (
-                batch["class_labels"][: args.num_validation_images].detach().cpu().tolist()
-            )
-            generated_captions = [class_set_emb[idx] for idx in generated_labels]
-            original_captions = [class_set_plain[idx] for idx in original_labels]
-
-            for tracker in accelerator.trackers:
-                log_wandb_latents(
-                    tracker,
-                    "validation/original",
-                    original_images,
-                    reference_latents,
-                    original_captions,
-                    global_step,
-                )
-                log_wandb_latents(
-                    tracker,
-                    "validation/generated",
-                    generated_images,
-                    generated_latents,
-                    generated_captions,
-                    global_step,
-                )
-
-        del pipeline
-        torch.cuda.empty_cache()
-
-    accelerator.wait_for_everyone()
-    if accelerator.is_main_process:
-        transformer_fp32 = unwrap_model(accelerator, transformer.to(torch.float32))
-        transformer_fp32.save_pretrained(
-            os.path.join(args.output_dir, "transformer"),
-            safe_serialization=True,
-        )
-
-        if args.validation_prompt is not None:
-            pipeline = create_pipeline(
-                args,
-                transformer_fp32,
-                vae,
-                noise_scheduler,
-                weight_dtype,
-            )
+            pipeline = create_pipeline(args, unwrapped_transformer, vae, noise_scheduler, weight_dtype)
             pipeline.vae.to(accelerator.device, dtype=weight_dtype)
+
             with torch.no_grad():
-                generated_latents_list, generated_labels = log_validation(
+                generated_latents, generated_labels = log_validation(
                     pipeline,
                     args,
                     accelerator,
@@ -688,24 +771,56 @@ def main():
                     class_embeddings=class_embeddings,
                     class_set=class_set_emb,
                     unique_train_labels=unique_train_labels,
-                    is_final_validation=True,
                 )
-                generated_latents = generated_latents_list[0].to(pipeline.vae.dtype)
+
+                generated_latents = generated_latents.to(pipeline.vae.dtype)
                 generated_images = decode_latents(pipeline.vae, generated_latents)
+
+                reference_latents = batch["latents"][: args.num_validation_images].to(pipeline.vae.dtype)
+                original_images = decode_latents(pipeline.vae, reference_latents)
+
+                logger.info("sf = %s", pipeline.vae.config.scaling_factor)
+                logger.info("std ratio: %s  expected ~ %s", generated_latents.float().std() / reference_latents.float().std(), 1/pipeline.vae.config.scaling_factor)
+
+                # also log the max, min, std of generated and original latents
+                generated_latents_before_vae = generated_latents * pipeline.vae.config.scaling_factor
+                logger.info(f"Generated latents before vae max: {generated_latents_before_vae.max()}, min: {generated_latents_before_vae.min()}, std: {generated_latents_before_vae.std()}")
+                # logger.info(f"Generated latents max: {generated_latents.max()}, min: {generated_latents.min()}, std: {generated_latents.std()}")
+                logger.info(f"Original latents max: {reference_latents.max()}, min: {reference_latents.min()}, std: {reference_latents.std()}")
+
+                original_labels = (
+                    batch["class_labels"][: args.num_validation_images].detach().cpu().tolist()
+                )
                 generated_captions = [class_set_emb[idx] for idx in generated_labels]
+                original_captions = [class_set_plain[idx] for idx in original_labels]
 
                 for tracker in accelerator.trackers:
                     log_wandb_latents(
                         tracker,
-                        "validation/final_generated",
+                        "validation/original",
+                        original_images,
+                        reference_latents,
+                        original_captions,
+                        global_step,
+                    )
+                    log_wandb_latents(
+                        tracker,
+                        "validation/generated",
                         generated_images,
                         generated_latents,
                         generated_captions,
                         global_step,
                     )
+
+            # Restore original transformer parameters after validation
+            if ema_model is not None:
+                ema_model.restore(unwrapped_transformer.parameters())
+
             del pipeline
             torch.cuda.empty_cache()
 
+    accelerator.wait_for_everyone()
+    torch.cuda.empty_cache()
     accelerator.end_training()
 
 

@@ -7,9 +7,9 @@ selected_cars = [
     "Buick_Enclave_SUV_2012",
     
     # First 3 Coupes
-    # "Acura_Integra_Type_R_2001",
-    # "Aston_Martin_V8_Vantage_Coupe_2012",
-    # "Audi_A5_Coupe_2012",
+    "Acura_Integra_Type_R_2001",
+    "Aston_Martin_V8_Vantage_Coupe_2012",
+    "Audi_A5_Coupe_2012",
     
     # First 3 Sedans
     # "Acura_RL_Sedan_2012",
@@ -17,9 +17,9 @@ selected_cars = [
     # "Acura_TL_Type-S_2008",
     
     # First 3 Hatchbacks
-    # "Acura_ZDX_Hatchback_2012",
-    # "Audi_TT_Hatchback_2011",
-    # "Eagle_Talon_Hatchback_1998",
+    "Acura_ZDX_Hatchback_2012",
+    "Audi_TT_Hatchback_2011",
+    "Eagle_Talon_Hatchback_1998",
     
     # First 3 Convertibles
     # "Aston_Martin_V8_Vantage_Convertible_2012",
@@ -27,9 +27,9 @@ selected_cars = [
     # "Audi_RS_4_Convertible_2008",
     
     # First 3 Wagons
-    # "Audi_100_Wagon_1994",
-    # "BMW_3_Series_Wagon_2012",
-    # "Daewoo_Nubira_Wagon_2002",
+    "Audi_100_Wagon_1994",
+    "BMW_3_Series_Wagon_2012",
+    "Daewoo_Nubira_Wagon_2002",
     
     # First 3 Cabs
     # "Cadillac_Escalade_EXT_Crew_Cab_2007",
